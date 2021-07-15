@@ -902,6 +902,8 @@ class Libraries(object):
         else:
             query_days = [1, 7, 30, 0]
 
+        timestamp = helpers.timestamp()
+
         monitor_db = database.MonitorDatabase()
 
         library_watch_time_stats = []
@@ -909,7 +911,7 @@ class Libraries(object):
         group_by = 'session_history.reference_id' if grouping else 'session_history.id'
 
         for days in query_days:
-            timestamp = int((datetime.now(tz=plexpy.SYS_TIMEZONE) - timedelta(days=days)).timestamp())
+            timestamp_query = timestamp - days * 24 * 60 * 60
 
             try:
                 if days > 0:
@@ -920,7 +922,7 @@ class Libraries(object):
                                 'FROM session_history ' \
                                 'JOIN session_history_metadata ON session_history_metadata.id = session_history.id ' \
                                 'WHERE stopped >= %s ' \
-                                'AND section_id = ?' % (group_by, timestamp)
+                                'AND section_id = ?' % (group_by, timestamp_query)
                         result = monitor_db.select(query, args=[section_id])
                     else:
                         result = []
@@ -1097,7 +1099,7 @@ class Libraries(object):
         if row_ids and row_ids is not None:
             row_ids = list(map(helpers.cast_to_int, row_ids.split(',')))
 
-            # Get the user_ids corresponding to the row_ids
+            # Get the section_ids corresponding to the row_ids
             result = monitor_db.select('SELECT server_id, section_id FROM library_sections '
                                        'WHERE id IN ({})'.format(','.join(['?'] * len(row_ids))), row_ids)
 

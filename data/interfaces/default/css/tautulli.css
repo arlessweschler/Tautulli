@@ -2175,6 +2175,10 @@ span.settings-warning {
     padding-left: 10px;
     margin-left: -10px;
 }
+#newsletter_agent_options.hidden-settings {
+    padding-left: 15px;
+    margin-left: 0;
+}
 .advanced-setting {
     display: none;
 }
@@ -3432,6 +3436,22 @@ pre::-webkit-scrollbar-thumb {
     -o-transition: background 0.3s;
     transition: background 0.3s;
 }
+@media (max-width: 767px) {
+    #search_form {
+        width: 100%;
+    }
+    #search_form span.input-textbox {
+        width: 100%;
+    }
+    #search_form #query {
+        width: 100%;
+        right: 0;
+    }
+    #search_form #query.active {
+        width: 100%;
+        right: 0px;
+    }
+}
 #update_search_form div.input-group {
     display: inline-table;
     vertical-align: middle;
@@ -3868,16 +3888,15 @@ a:hover .overlay-refresh-image:hover {
 #changelog-modal ul {
     padding-left: 20px;
 }
-.google-play-badge {
-    display:inline-block;
-    height:45px;
-    margin-top: 10px;
+.app-badge {
+    float: left;
+    display: inline-block;
+    height: 46px;
+    margin-right: 10px;
+    margin-bottom: 5px;
 }
-.google-play-badge img {
-    border: 1px solid #3B3B3B;
-    border-radius: 6px;
-    box-sizing: border-box;
-    height: 45px;
+.app-badge img {
+    height: 46px;
     vertical-align: middle;
 }
 

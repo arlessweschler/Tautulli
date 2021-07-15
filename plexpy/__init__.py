@@ -790,7 +790,8 @@ def dbcheck():
     # mobile_devices table :: This table keeps record of devices linked with the mobile app
     c_db.execute(
         'CREATE TABLE IF NOT EXISTS mobile_devices (id INTEGER PRIMARY KEY AUTOINCREMENT, '
-        'device_id TEXT NOT NULL UNIQUE, device_token TEXT, device_name TEXT, friendly_name TEXT, '
+        'device_id TEXT NOT NULL UNIQUE, device_token TEXT, device_name TEXT, '
+        'platform TEXT, version TEXT, friendly_name TEXT, '
         'onesignal_id TEXT, last_seen INTEGER, official INTEGER DEFAULT 0)'
     )
 
@@ -2214,6 +2215,23 @@ def dbcheck():
             'ALTER TABLE mobile_devices ADD COLUMN onesignal_id TEXT'
         )
 
+    # Upgrade mobile_devices table from earlier versions
+    try:
+        c_db.execute('SELECT platform FROM mobile_devices')
+    except sqlite3.OperationalError:
+        logger.debug("Altering database. Updating database table mobile_devices.")
+        c_db.execute(
+            'ALTER TABLE mobile_devices ADD COLUMN platform TEXT'
+        )
+        c_db.execute(
+            'ALTER TABLE mobile_devices ADD COLUMN version TEXT'
+        )
+        # Update mobile device platforms
+        for device_id, in c_db.execute(
+                'SELECT device_id FROM mobile_devices WHERE official > 0').fetchall():
+            c_db.execute('UPDATE mobile_devices SET platform = ? WHERE device_id = ?',
+                         ['android', device_id])
+
     # Upgrade notifiers table from earlier versions
     try:
         c_db.execute('SELECT custom_conditions FROM notifiers')
@@ -2324,7 +2342,9 @@ def dbcheck():
 
     # Rename notifiers in the database
     result = c_db.execute('SELECT agent_label FROM notifiers '
-                          'WHERE agent_label = "XBMC" OR agent_label = "OSX Notify"').fetchone()
+                          'WHERE agent_label = "XBMC" '
+                          'OR agent_label = "OSX Notify" '
+                          'OR agent_name = "androidapp"').fetchone()
     if result:
         logger.debug("Altering database. Renaming notifiers.")
         c_db.execute(
@@ -2332,6 +2352,10 @@ def dbcheck():
         )
         c_db.execute(
             'UPDATE notifiers SET agent_label = "macOS Notification Center" WHERE agent_label = "OSX Notify"'
+        )
+        c_db.execute(
+            'UPDATE notifiers SET agent_name = "remoteapp", agent_label = "Tautulli Remote App" '
+            'WHERE agent_name = "androidapp"'
         )
 
     # Upgrade exports table from earlier versions
@@ -2380,6 +2404,20 @@ def dbcheck():
     try:
         c_db.execute('DELETE FROM image_hash_lookup '
                      'WHERE id NOT IN (SELECT MIN(id) FROM image_hash_lookup GROUP BY img_hash)')
+    except sqlite3.OperationalError:
+        pass
+
+    # Upgrade imgur_lookup table from earlier versions
+    try:
+        c_db.execute('DELETE FROM imgur_lookup '
+                     'WHERE id NOT IN (SELECT MIN(id) FROM imgur_lookup GROUP BY img_hash)')
+    except sqlite3.OperationalError:
+        pass
+
+    # Upgrade cloudinary_lookup table from earlier versions
+    try:
+        c_db.execute('DELETE FROM cloudinary_lookup '
+                     'WHERE id NOT IN (SELECT MIN(id) FROM cloudinary_lookup GROUP BY img_hash)')
     except sqlite3.OperationalError:
         pass
 

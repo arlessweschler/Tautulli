@@ -295,7 +295,7 @@ def notify_custom_conditions(notifier_id=None, parameters=None):
             # Cast the condition values to the correct type
             try:
                 if parameter_type == 'str':
-                    values = [str(v).lower() for v in values]
+                    values = ['' if v == '~' else str(v).lower() for v in values]
 
                 elif parameter_type == 'int':
                     values = [helpers.cast_to_int(v) for v in values]
@@ -573,9 +573,13 @@ def build_media_notify_params(notify_action=None, session=None, timeline=None, m
 
     child_metadata = grandchild_metadata = []
     for key in kwargs.pop('child_keys', []):
-        child_metadata.append(pmsconnect.PmsConnect().get_metadata_details(rating_key=key))
+        child = pmsconnect.PmsConnect().get_metadata_details(rating_key=key)
+        if child:
+            child_metadata.append(child)
     for key in kwargs.pop('grandchild_keys', []):
-        grandchild_metadata.append(pmsconnect.PmsConnect().get_metadata_details(rating_key=key))
+        grandchild = pmsconnect.PmsConnect().get_metadata_details(rating_key=key)
+        if grandchild:
+            grandchild_metadata.append(grandchild)
 
     # Session values
     session = session or {}
@@ -1814,6 +1818,25 @@ def str_format(s, parameters):
     return s
 
 
+def str_eval(field_name, kwargs):
+    field_name = field_name.strip('`')
+    allowed_names = {
+        'bool': bool,
+        'divmod': helpers.helper_divmod,
+        'float': helpers.cast_to_float,
+        'int': helpers.cast_to_int,
+        'len': helpers.helper_len,
+        'round': helpers.helper_round,
+        'str': str
+    }
+    allowed_names.update(kwargs)
+    code = compile(field_name, '<string>', 'eval')
+    for name in code.co_names:
+        if name not in allowed_names:
+            raise NameError('Use of {name} not allowed'.format(name=name))
+    return eval(code, {'__builtins__': {}}, allowed_names)
+
+
 class CustomFormatter(Formatter):
     def __init__(self, default='{{{0}}}'):
         self.default = default
@@ -1877,20 +1900,22 @@ class CustomFormatter(Formatter):
             prefix = None
             suffix = None
 
-            if real_format_string != format_string[1:-1]:
-                prefix_split = real_format_string.split('<')
-                if len(prefix_split) == 2:
-                    prefix = prefix_split[0].replace('\\n', '\n')
-                    real_format_string = prefix_split[1]
+            matches = re.findall(r'`.*?`', real_format_string)
+            temp_format_string = re.sub(r'`.*`', '{}', real_format_string)
 
-                suffix_split = real_format_string.split('>')
-                if len(suffix_split) == 2:
-                    suffix = suffix_split[1].replace('\\n', '\n')
-                    real_format_string = suffix_split[0]
+            prefix_split = temp_format_string.split('<')
+            if len(prefix_split) == 2:
+                prefix = prefix_split[0].replace('\\n', '\n')
+                temp_format_string = prefix_split[1]
 
-                if prefix or suffix:
-                    real_format_string = '{' + real_format_string + '}'
-                    _, field_name, format_spec, conversion, _, _ = next(self.parse(real_format_string))
+            suffix_split = temp_format_string.split('>')
+            if len(suffix_split) == 2:
+                suffix = suffix_split[1].replace('\\n', '\n')
+                temp_format_string = suffix_split[0]
+
+            if prefix or suffix:
+                real_format_string = '{' + temp_format_string.format(*matches) + '}'
+                _, field_name, format_spec, conversion, _, _ = next(self.parse(real_format_string))
 
             yield literal_text, field_name, format_spec, conversion, prefix, suffix
 
@@ -1926,10 +1951,19 @@ class CustomFormatter(Formatter):
                     # used later on, then an exception will be raised
                     auto_arg_index = False
 
-                # given the field_name, find the object it references
-                #  and the argument it came from
-                obj, arg_used = self.get_field(field_name, args, kwargs)
-                used_args.add(arg_used)
+                if plexpy.CONFIG.NOTIFY_TEXT_EVAL and field_name.startswith('`') and field_name.endswith('`'):
+                    try:
+                        obj = str_eval(field_name, kwargs)
+                        used_args.add(field_name)
+                    except (SyntaxError, NameError, ValueError, TypeError) as e:
+                        logger.error("Tautulli NotificationHandler :: Failed to evaluate notification text %s: %s.",
+                                     field_name, e)
+                        obj = field_name
+                else:
+                    # given the field_name, find the object it references
+                    #  and the argument it came from
+                    obj, arg_used = self.get_field(field_name, args, kwargs)
+                    used_args.add(arg_used)
 
                 # do any conversion on the resulting object
                 obj = self.convert_field(obj, conversion)

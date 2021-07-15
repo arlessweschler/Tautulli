@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 #  This file is part of Tautulli.
 #
@@ -21,6 +21,7 @@ from future.builtins import object
 
 import base64
 import bleach
+from collections import defaultdict
 import json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -98,7 +99,7 @@ AGENT_IDS = {'growl': 0,
              'browser': 17,
              'join': 18,
              'discord': 20,
-             'androidapp': 21,
+             'remoteapp': 21,
              'groupme': 22,
              'mqtt': 23,
              'zapier': 24,
@@ -110,10 +111,10 @@ DEFAULT_CUSTOM_CONDITIONS = [{'parameter': '', 'operator': '', 'value': ''}]
 
 
 def available_notification_agents():
-    agents = [{'label': 'Tautulli Remote Android App',
-               'name': 'androidapp',
-               'id': AGENT_IDS['androidapp'],
-               'class': ANDROIDAPP,
+    agents = [{'label': 'Tautulli Remote App',
+               'name': 'remoteapp',
+               'id': AGENT_IDS['remoteapp'],
+               'class': TAUTULLIREMOTEAPP,
                'action_types': ('all',)
                },
               {'label': 'Boxcar',
@@ -882,188 +883,6 @@ class Notifier(object):
         return config_options
 
 
-class ANDROIDAPP(Notifier):
-    """
-    Tautulli Remote Android app notifications
-    """
-    NAME = 'Tautulli Remote Android App'
-    _DEFAULT_CONFIG = {'device_id': '',
-                       'priority': 3,
-                       'notification_type': 0
-                       }
-
-    def agent_notify(self, subject='', body='', action='', notification_id=None, **kwargs):
-        # Check mobile device is still registered
-        device = mobile_app.get_mobile_devices(device_id=self.config['device_id'])
-        if not device:
-            logger.warn("Tautulli Notifiers :: Unable to send Android app notification: device not registered.")
-            return
-        else:
-            device = device[0]
-
-        pretty_metadata = PrettyMetadata(kwargs.get('parameters'))
-
-        plaintext_data = {'notification_id': notification_id,
-                          'subject': subject,
-                          'body': body,
-                          'action': action,
-                          'priority': self.config['priority'],
-                          'notification_type': self.config['notification_type'],
-                          'session_key': pretty_metadata.parameters.get('session_key', ''),
-                          'session_id': pretty_metadata.parameters.get('session_id', ''),
-                          'user_id': pretty_metadata.parameters.get('user_id', ''),
-                          'rating_key': pretty_metadata.parameters.get('rating_key', ''),
-                          'poster_thumb': pretty_metadata.parameters.get('poster_thumb', '')}
-
-        #logger.debug("Plaintext data: {}".format(plaintext_data))
-
-        if CRYPTODOME:
-            # Key generation
-            salt = get_random_bytes(16)
-            passphrase = device['device_token']
-            key_length = 32  # AES256
-            iterations = 1000
-            key = PBKDF2(passphrase, salt, dkLen=key_length, count=iterations,
-                         prf=lambda p, s: HMAC.new(p, s, SHA1).digest())
-
-            #logger.debug("Encryption key (base64): {}".format(base64.b64encode(key)))
-
-            # Encrypt using AES GCM
-            nonce = get_random_bytes(16)
-            cipher = AES.new(key, AES.MODE_GCM, nonce)
-            encrypted_data, gcm_tag = cipher.encrypt_and_digest(json.dumps(plaintext_data).encode('utf-8'))
-            encrypted_data += gcm_tag
-
-            #logger.debug("Encrypted data (base64): {}".format(base64.b64encode(encrypted_data)))
-            #logger.debug("GCM tag (base64): {}".format(base64.b64encode(gcm_tag)))
-            #logger.debug("Nonce (base64): {}".format(base64.b64encode(nonce)))
-            #logger.debug("Salt (base64): {}".format(base64.b64encode(salt)))
-
-            payload = {'app_id': mobile_app._ONESIGNAL_APP_ID,
-                       'include_player_ids': [device['onesignal_id']],
-                       'contents': {'en': 'Tautulli Notification'},
-                       'data': {'encrypted': True,
-                                'cipher_text': base64.b64encode(encrypted_data),
-                                'nonce': base64.b64encode(nonce),
-                                'salt': base64.b64encode(salt),
-                                'server_id': plexpy.CONFIG.PMS_UUID}
-                       }
-        else:
-            logger.warn("Tautulli Notifiers :: PyCryptodome library is missing. "
-                        "Android app notifications will be sent unecrypted. "
-                        "Install the library to encrypt the notifications.")
-
-            payload = {'app_id': mobile_app._ONESIGNAL_APP_ID,
-                       'include_player_ids': [device['onesignal_id']],
-                       'contents': {'en': 'Tautulli Notification'},
-                       'data': {'encrypted': False,
-                                'plain_text': plaintext_data,
-                                'server_id': plexpy.CONFIG.PMS_UUID}
-                       }
-
-        #logger.debug("OneSignal payload: {}".format(payload))
-
-        headers = {'Content-Type': 'application/json'}
-
-        return self.make_request("https://onesignal.com/api/v1/notifications", headers=headers, json=payload)
-
-    def get_devices(self):
-        db = database.MonitorDatabase()
-
-        try:
-            query = 'SELECT * FROM mobile_devices WHERE official = 1 ' \
-                    'AND onesignal_id IS NOT NULL AND onesignal_id != ""'
-            result = db.select(query=query)
-        except Exception as e:
-            logger.warn("Tautulli Notifiers :: Unable to retrieve Android app devices list: %s." % e)
-            return {'': ''}
-
-        devices = {}
-        for device in result:
-            if device['friendly_name']:
-                devices[device['device_id']] = device['friendly_name']
-            else:
-                devices[device['device_id']] = device['device_name']
-
-        return devices
-
-    def _return_config_options(self):
-        config_option = []
-
-        if not CRYPTODOME:
-            config_option.append({
-                'label': 'Warning',
-                'description': '<strong>The PyCryptodome library is missing. '
-                               'The content of your notifications will be sent unencrypted!</strong><br>'
-                               'Please install the library to encrypt the notification contents. '
-                               'Instructions can be found in the '
-                               '<a href="' + helpers.anon_url(
-                                 'https://github.com/%s/%s/wiki/Frequently-Asked-Questions#notifications-pycryptodome'
-                                 % (plexpy.CONFIG.GIT_USER, plexpy.CONFIG.GIT_REPO)) + '" target="_blank">FAQ</a>.' ,
-                'input_type': 'help'
-                })
-        else:
-            config_option.append({
-                'label': 'Note',
-                'description': 'The PyCryptodome library was found. '
-                               'The content of your notifications will be sent encrypted!',
-                'input_type': 'help'
-                })
-
-        config_option[-1]['description'] += '<br><br>Notifications are sent using the ' \
-            '<a href="' + helpers.anon_url('https://onesignal.com') + '" target="_blank">' \
-            'OneSignal</a>. Some user data is collected and cannot be encrypted. ' \
-            'Please read the <a href="' + helpers.anon_url(
-                'https://onesignal.com/privacy_policy') + '" target="_blank">' \
-            'OneSignal Privacy Policy</a> for more details.'
-
-        devices = self.get_devices()
-
-        if not devices:
-            config_option.append({
-                'label': 'Device',
-                'description': 'No mobile devices registered with OneSignal. '
-                               '<a data-tab-destination="android_app" data-toggle="tab" data-dismiss="modal">'
-                               'Get the Android App</a> and register a device.<br>'
-                               'Note: Only devices registered with a valid OneSignal ID will appear in the list.',
-                'input_type': 'help'
-                })
-        else:
-            config_option.append({
-                'label': 'Device',
-                'value': self.config['device_id'],
-                'name': 'androidapp_device_id',
-                'description': 'Set your mobile device or '
-                               '<a data-tab-destination="android_app" data-toggle="tab" data-dismiss="modal">'
-                               'register a new device</a> with Tautulli.<br>'
-                               'Note: Only devices registered with a valid OneSignal ID will appear in the list.',
-                'input_type': 'select',
-                'select_options': devices
-                })
-
-        config_option.append({
-            'label': 'Priority',
-            'value': self.config['priority'],
-            'name': 'androidapp_priority',
-            'description': 'Set the notification priority.',
-            'input_type': 'select',
-            'select_options': {1: 'Minimum', 2: 'Low', 3: 'Normal', 4: 'High'}
-            })
-        config_option.append({
-            'label': 'Notification Image Type',
-            'value': self.config['notification_type'],
-            'name': 'androidapp_notification_type',
-            'description': 'Set the notification image type.',
-            'input_type': 'select',
-            'select_options': {0: 'No notification image',
-                               1: 'Small image (Expandable text)',
-                               2: 'Large image (Non-expandable text)'
-                               }
-            })
-
-        return config_option
-
-
 class BOXCAR(Notifier):
     """
     Boxcar notifications
@@ -1308,7 +1127,7 @@ class DISCORD(Notifier):
                           'description': 'Include an info card with a poster and metadata with the notifications.<br>'
                                          'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" '
                                          'data-target="notify_upload_posters">Image Hosting</a> '
-                                         'must be enabled under the notifications settings tab.',
+                                         'must be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'checkbox'
                           },
                          {'label': 'Include Plot Summaries',
@@ -1333,7 +1152,8 @@ class DISCORD(Notifier):
                           'value': self.config['movie_provider'],
                           'name': 'discord_movie_provider',
                           'description': 'Select the source for movie links on the info cards. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_movie_providers()
                           },
@@ -1341,7 +1161,8 @@ class DISCORD(Notifier):
                           'value': self.config['tv_provider'],
                           'name': 'discord_tv_provider',
                           'description': 'Select the source for tv show links on the info cards. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_tv_providers()
                           },
@@ -1694,14 +1515,15 @@ class FACEBOOK(Notifier):
                           'description': 'Include an info card with a poster and metadata with the notifications.<br>'
                                          'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" '
                                          'data-target="notify_upload_posters">Image Hosting</a> '
-                                         'must be enabled under the notifications settings tab.',
+                                         'must be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'checkbox'
                           },
                          {'label': 'Movie Link Source',
                           'value': self.config['movie_provider'],
                           'name': 'facebook_movie_provider',
                           'description': 'Select the source for movie links on the info cards. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_movie_providers()
                           },
@@ -1709,7 +1531,8 @@ class FACEBOOK(Notifier):
                           'value': self.config['tv_provider'],
                           'name': 'facebook_tv_provider',
                           'description': 'Select the source for tv show links on the info cards. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_tv_providers()
                           },
@@ -2063,14 +1886,15 @@ class JOIN(Notifier):
                           'description': 'Include a poster with the notifications.<br>'
                                          'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" '
                                          'data-target="notify_upload_posters">Image Hosting</a> '
-                                         'must be enabled under the notifications settings tab.',
+                                         'must be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'checkbox'
                           },
                          {'label': 'Movie Link Source',
                           'value': self.config['movie_provider'],
                           'name': 'join_movie_provider',
                           'description': 'Select the source for movie links in the notification. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_movie_providers()
                           },
@@ -2078,7 +1902,8 @@ class JOIN(Notifier):
                           'value': self.config['tv_provider'],
                           'name': 'join_tv_provider',
                           'description': 'Select the source for tv show links in the notification. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_tv_providers()
                           },
@@ -2962,7 +2787,8 @@ class PUSHOVER(Notifier):
                           'value': self.config['movie_provider'],
                           'name': 'pushover_movie_provider',
                           'description': 'Select the source for movie links in the notification. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_movie_providers()
                           },
@@ -2970,7 +2796,8 @@ class PUSHOVER(Notifier):
                           'value': self.config['tv_provider'],
                           'name': 'pushover_tv_provider',
                           'description': 'Select the source for tv show links in the notification. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_tv_providers()
                           },
@@ -3340,7 +3167,7 @@ class SLACK(Notifier):
                           'description': 'Include an info card with a poster and metadata with the notifications.<br>'
                                          'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" '
                                          'data-target="notify_upload_posters">Image Hosting</a> '
-                                         'must be enabled under the notifications settings tab.',
+                                         'must be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'checkbox'
                           },
                          {'label': 'Include Plot Summaries',
@@ -3365,7 +3192,8 @@ class SLACK(Notifier):
                           'value': self.config['movie_provider'],
                           'name': 'slack_movie_provider',
                           'description': 'Select the source for movie links on the info cards. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_movie_providers()
                           },
@@ -3373,7 +3201,8 @@ class SLACK(Notifier):
                           'value': self.config['tv_provider'],
                           'name': 'slack_tv_provider',
                           'description': 'Select the source for tv show links on the info cards. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_tv_providers()
                           },
@@ -3385,6 +3214,200 @@ class SLACK(Notifier):
                           'select_options': PrettyMetadata().get_music_providers()
                           }
                          ]
+
+        return config_option
+
+
+class TAUTULLIREMOTEAPP(Notifier):
+    """
+    Tautulli Remote app notifications
+    """
+    NAME = 'Tautulli Remote App'
+    _DEFAULT_CONFIG = {'device_id': '',
+                       'priority': 3,
+                       'notification_type': 0
+                       }
+
+    def agent_notify(self, subject='', body='', action='', notification_id=None, **kwargs):
+        # Check mobile device is still registered
+        device = mobile_app.get_mobile_devices(device_id=self.config['device_id'])
+        if not device:
+            logger.warn("Tautulli Notifiers :: Unable to send Tautulli Remote app notification: device not registered.")
+            return
+        else:
+            device = device[0]
+
+        pretty_metadata = PrettyMetadata(kwargs.get('parameters'))
+
+        plaintext_data = {'notification_id': notification_id,
+                          'subject': subject,
+                          'body': body,
+                          'action': action,
+                          'priority': self.config['priority'],
+                          'notification_type': self.config['notification_type'],
+                          'session_key': pretty_metadata.parameters.get('session_key', ''),
+                          'session_id': pretty_metadata.parameters.get('session_id', ''),
+                          'user_id': pretty_metadata.parameters.get('user_id', ''),
+                          'rating_key': pretty_metadata.parameters.get('rating_key', ''),
+                          'poster_thumb': pretty_metadata.parameters.get('poster_thumb', '')}
+
+        #logger.debug("Plaintext data: {}".format(plaintext_data))
+
+        if CRYPTODOME:
+            # Key generation
+            salt = get_random_bytes(16)
+            passphrase = device['device_token']
+            key_length = 32  # AES256
+            iterations = 1000
+            key = PBKDF2(passphrase, salt, dkLen=key_length, count=iterations,
+                         prf=lambda p, s: HMAC.new(p, s, SHA1).digest())
+
+            #logger.debug("Encryption key (base64): {}".format(base64.b64encode(key)))
+
+            # Encrypt using AES GCM
+            nonce = get_random_bytes(16)
+            cipher = AES.new(key, AES.MODE_GCM, nonce)
+            encrypted_data, gcm_tag = cipher.encrypt_and_digest(json.dumps(plaintext_data).encode('utf-8'))
+            encrypted_data += gcm_tag
+
+            #logger.debug("Encrypted data (base64): {}".format(base64.b64encode(encrypted_data)))
+            #logger.debug("GCM tag (base64): {}".format(base64.b64encode(gcm_tag)))
+            #logger.debug("Nonce (base64): {}".format(base64.b64encode(nonce)))
+            #logger.debug("Salt (base64): {}".format(base64.b64encode(salt)))
+
+            payload = {'app_id': mobile_app._ONESIGNAL_APP_ID,
+                       'include_player_ids': [device['onesignal_id']],
+                       'contents': {'en': 'Tautulli Notification'},
+                       'data': {'encrypted': True,
+                                'cipher_text': base64.b64encode(encrypted_data),
+                                'nonce': base64.b64encode(nonce),
+                                'salt': base64.b64encode(salt),
+                                'server_id': plexpy.CONFIG.PMS_UUID}
+                       }
+        else:
+            logger.warn("Tautulli Notifiers :: PyCryptodome library is missing. "
+                        "Tautulli Remote app notifications will be sent unecrypted. "
+                        "Install the library to encrypt the notifications.")
+
+            payload = {'app_id': mobile_app._ONESIGNAL_APP_ID,
+                       'include_player_ids': [device['onesignal_id']],
+                       'contents': {'en': 'Tautulli Notification'},
+                       'data': {'encrypted': False,
+                                'plain_text': plaintext_data,
+                                'server_id': plexpy.CONFIG.PMS_UUID}
+                       }
+
+        #logger.debug("OneSignal payload: {}".format(payload))
+
+        headers = {'Content-Type': 'application/json'}
+
+        return self.make_request("https://onesignal.com/api/v1/notifications", headers=headers, json=payload)
+
+    def get_devices(self):
+        db = database.MonitorDatabase()
+
+        try:
+            query = 'SELECT * FROM mobile_devices WHERE official = 1 ' \
+                    'AND onesignal_id IS NOT NULL AND onesignal_id != ""'
+            return db.select(query=query)
+        except Exception as e:
+            logger.warn("Tautulli Notifiers :: Unable to retrieve Tautulli Remote app devices list: %s." % e)
+            return []
+
+    def _return_config_options(self):
+        config_option = []
+
+        if not CRYPTODOME:
+            config_option.append({
+                'label': 'Warning',
+                'description': '<strong>The PyCryptodome library is missing. '
+                               'The content of your notifications will be sent unencrypted!</strong><br>'
+                               'Please install the library to encrypt the notification contents. '
+                               'Instructions can be found in the '
+                               '<a href="' + helpers.anon_url(
+                                 'https://github.com/%s/%s/wiki/Frequently-Asked-Questions#notifications-pycryptodome'
+                                 % (plexpy.CONFIG.GIT_USER, plexpy.CONFIG.GIT_REPO)) + '" target="_blank">FAQ</a>.' ,
+                'input_type': 'help'
+            })
+        else:
+            config_option.append({
+                'label': 'Note',
+                'description': 'The PyCryptodome library was found. '
+                               'The content of your notifications will be sent encrypted!',
+                'input_type': 'help'
+            })
+
+        config_option[-1]['description'] += ('<br><br>Notifications are sent using '
+            '<a href="' + helpers.anon_url('https://onesignal.com') + '" target="_blank">'
+            'OneSignal</a>. Some user data is collected and cannot be encrypted.<br>'
+            'Please read the <a href="' + helpers.anon_url(
+                'https://onesignal.com/privacy_policy') + '" target="_blank">'
+            'OneSignal Privacy Policy</a> for more details.')
+
+        devices = self.get_devices()
+
+        if not devices:
+            config_option.append({
+                'label': 'Device',
+                'description': 'No mobile devices registered with OneSignal. '
+                               '<a data-tab-destination="remote_app" data-toggle="tab" data-dismiss="modal">'
+                               'Get the Tautulli Remote App</a> and register a device.<br>'
+                               'Note: Only devices registered with a valid OneSignal ID will appear in the list.',
+                'input_type': 'help'
+            })
+        else:
+            if len({d['platform'] for d in devices}) <= 1:
+                device_select = {d['device_id']: d['friendly_name'] or d['device_name'] for d in devices}
+            else:
+                device_select = defaultdict(list)
+                for d in devices:
+                    platform = 'iOS' if d['platform'] == 'ios' else d['platform'].capitalize()
+                    device_select[platform].append({
+                        'value': d['device_id'],
+                        'text': d['friendly_name'] or d['device_name']
+                    })
+
+            config_option.append({
+                'label': 'Device',
+                'value': self.config['device_id'],
+                'name': 'remoteapp_device_id',
+                'description': 'Select your mobile device or '
+                               '<a data-tab-destination="remote_app" data-toggle="tab" data-dismiss="modal">'
+                               'register a new device</a> with Tautulli.<br>'
+                               'Note: Only devices registered with a valid OneSignal ID will appear in the list.',
+                'input_type': 'select',
+                'select_options': device_select,
+                'refresh': True
+            })
+
+        platform = next((d['platform'] for d in devices if d['device_id'] == self.config['device_id']), None)
+
+        if platform == 'android':
+            config_option.append({
+                'label': 'Priority',
+                'value': self.config['priority'],
+                'name': 'remoteapp_priority',
+                'description': 'Set the notification priority.',
+                'input_type': 'select',
+                'select_options': {
+                    1: 'Minimum',
+                    2: 'Low',
+                    3: 'Normal',
+                    4: 'High'
+                }
+            })
+            config_option.append({
+                'label': 'Notification Image Type',
+                'value': self.config['notification_type'],
+                'name': 'remoteapp_notification_type',
+                'description': 'Set the notification image type.',
+                'input_type': 'select',
+                'select_options': {
+                    0: 'No notification image',
+                    1: 'Small image (Expandable text)',
+                    2: 'Large image (Non-expandable text)'
+                }
+            })
 
         return config_option
 
@@ -3599,7 +3622,7 @@ class TWITTER(Notifier):
                           'description': 'Include a poster with the notifications.<br>'
                                          'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" '
                                          'data-target="notify_upload_posters">Image Hosting</a> '
-                                         'must be enabled under the notifications settings tab.',
+                                         'must be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'checkbox'
                           }
                          ]
@@ -3853,7 +3876,8 @@ class ZAPIER(Notifier):
                           'value': self.config['movie_provider'],
                           'name': 'zapier_movie_provider',
                           'description': 'Select the source for movie links in the notification. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_movie_providers()
                           },
@@ -3861,7 +3885,8 @@ class ZAPIER(Notifier):
                           'value': self.config['tv_provider'],
                           'name': 'zapier_tv_provider',
                           'description': 'Select the source for tv show links in the notification. Leave blank to disable.<br>'
-                                         'Note: 3rd party API lookup may need to be enabled under the notifications settings tab.',
+                                         'Note: <a data-tab-destination="3rd_party_apis" data-dismiss="modal" >Metadata Lookups</a> '
+                                         'may need to be enabled under the 3rd Party APIs settings tab.',
                           'input_type': 'select',
                           'select_options': PrettyMetadata().get_tv_providers()
                           },
