@@ -1,6 +1,14 @@
+/* Override Bootstrap Glyphicons Font Path */
+@font-face {
+    font-family: "Glyphicons Halflings";
+    src: url("../fonts/bootstrap3/glyphicons-halflings-regular.eot");
+    src: url("../fonts/bootstrap3/glyphicons-halflings-regular.eot?#iefix") format("embedded-opentype"), url("../fonts/bootstrap3/glyphicons-halflings-regular.woff2") format("woff2"), url("../fonts/bootstrap3/glyphicons-halflings-regular.woff") format("woff"), url("../fonts/bootstrap3/glyphicons-halflings-regular.ttf") format("truetype"), url("../fonts/bootstrap3/glyphicons-halflings-regular.svg#glyphicons_halflingsregular") format("svg");
+}
+
 body {
     font-family: 'Open Sans', Arial, sans-serif;
     color: #eee;
+    background-color: #1f1f1f;
     margin-top: 50px;
     overflow: hidden;
 }
@@ -79,7 +87,6 @@ select.form-control {
     color: #eee !important;
     border: 0px solid #444 !important;
     background: #555 !important;
-    padding: 1px 2px;
     transition: background-color .3s;
 }
 .selectize-control.form-control .selectize-input {
@@ -87,7 +94,6 @@ select.form-control {
     align-items: center;
     flex-wrap: wrap;
     margin-bottom: 4px;
-    padding-left: 5px;
 }
 .selectize-control.form-control.selectize-pms-ip .selectize-input {
     padding-left: 12px !important;
@@ -121,6 +127,16 @@ select.form-control {
 #condition-widget .fa-plus,
 #condition-widget .fa-minus {
     cursor: pointer;
+}
+#condition-widget .condition-operator-col {
+    padding-left: 0;
+    padding-right: 0;
+}
+@media (max-width: 767px) {
+    #condition-widget .condition-operator-col {
+        padding-left: 15px;
+        padding-right: 15px;
+    }
 }
 .react-selectize.root-node .react-selectize-control .react-selectize-placeholder {
     color: #eee !important;
@@ -225,6 +241,9 @@ select.form-control option {
     color: #555;
     background-color: #eee;
 }
+select.btn {
+    text-align: left;
+}
 img {
     -webkit-box-sizing: content-box;
     -moz-box-sizing: content-box;
@@ -241,6 +260,17 @@ object {
 }
 .navbar-brand {
     padding: 3px 3px;
+}
+#nav-archived-indicator {
+    display: none;
+}
+.include-archived #nav-archived-indicator {
+    display: block;
+}
+/* Opacity, because visibility would start the nav links' transition: all, and WebKit then
+   keeps the links hidden for one more frame. */
+.fonts-loading body {
+    opacity: 0;
 }
 .nav > li > a {
     color: #999;
@@ -300,7 +330,8 @@ object {
     background-color: #999;
 }
 .padded-header {
-    margin: 25px 0 25px 0;
+    margin: 25px 0 25px -10px;
+    padding-left: 10px;
 }
 .padded-header h1,h2,h3,h4,h5,h6 {
     color: #eee;
@@ -327,20 +358,20 @@ object {
 }
 .btn-dark:focus,
 .btn-dark.focus {
-  color: #d7d7d7;
-  background-color: #3B3B3B;
+    color: #d7d7d7;
+    background-color: #3B3B3B;
 }
 .btn-dark:hover {
-  color: #eee;
-  background-color: #333;
-  border-color: #444;
+    color: #eee;
+    background-color: #333;
+    border-color: #444;
 }
 .btn-dark:active,
 .btn-dark.active,
 .open > .dropdown-toggle.btn-dark {
-  color: #eee;
-  background-color: #333;
-  border-color: #444;
+    color: #eee;
+    background-color: #333;
+    border-color: #444;
 }
 .btn-dark:active:hover,
 .btn-dark.active:hover,
@@ -351,13 +382,13 @@ object {
 .btn-dark:active.focus,
 .btn-dark.active.focus,
 .open > .dropdown-toggle.btn-dark.focus {
-  color: #eee;
-  background-color: #333;
+    color: #eee;
+    background-color: #333;
 }
 .btn-dark:active,
 .btn-dark.active,
 .open > .dropdown-toggle.btn-dark {
-  background-image: none;
+    background-image: none;
 }
 .btn-dark.disabled,
 .btn-dark[disabled],
@@ -377,8 +408,8 @@ fieldset[disabled] .btn-dark:active,
 .btn-dark.disabled.active,
 .btn-dark[disabled].active,
 fieldset[disabled] .btn-dark.active {
-  background-color: #333;
-  color: #aaa;
+    background-color: #333;
+    color: #aaa;
 }
 .btn-dark.inactive:hover {
     color: #d7d7d7;
@@ -387,30 +418,30 @@ fieldset[disabled] .btn-dark.active {
     cursor: default;
 }
 .btn-dark .badge {
-  color: #e5e5e5;
-  background-color: #3B3B3B;
+    color: #e5e5e5;
+    background-color: #3B3B3B;
 }
 .btn-bright {
-  color: #eee;
-  background-color: #cc7b19;
-  box-shadow: inset 0 1px 0 #e7993b;
+    color: #eee;
+    background-color: #cc7b19;
+    box-shadow: inset 0 1px 0 #e7993b;
 }
 .btn-bright:focus,
 .btn-bright.focus {
-  color: #eee;
-  background-color: #eb8600;
+    color: #eee;
+    background-color: #eb8600;
 }
 .btn-bright:hover {
-  color: #eee;
-  background-color: #e59029;
-  box-shadow: inset 0 1px 0 #ebac60;
+    color: #eee;
+    background-color: #e59029;
+    box-shadow: inset 0 1px 0 #ebac60;
 }
 .btn-bright:active,
 .btn-bright.active,
 .open > .dropdown-toggle.btn-bright {
-  color: #eee;
-  background-color: #cc7b19;
-  box-shadow: inset 0 1px 0 #e7993b;
+    color: #eee;
+    background-color: #cc7b19;
+    box-shadow: inset 0 1px 0 #e7993b;
 }
 .btn-bright:active:hover,
 .btn-bright.active:hover,
@@ -421,14 +452,14 @@ fieldset[disabled] .btn-dark.active {
 .btn-bright:active.focus,
 .btn-bright.active.focus,
 .open > .dropdown-toggle.btn-bright.focus {
-  color: #eee;
-  background-color: #cc7b19;
-  box-shadow: inset 0 1px 0 #e7993b;
+    color: #eee;
+    background-color: #cc7b19;
+    box-shadow: inset 0 1px 0 #e7993b;
 }
 .btn-bright:active,
 .btn-bright.active,
 .open > .dropdown-toggle.btn-bright {
-  background-image: none;
+    background-image: none;
 }
 .btn-bright.disabled,
 .btn-bright[disabled],
@@ -448,13 +479,13 @@ fieldset[disabled] .btn-bright:active,
 .btn-bright.disabled.active,
 .btn-bright[disabled].active,
 fieldset[disabled] .btn-bright.active {
-  background-color: #cc7b19;
-  border-color: #b56d16;
+    background-color: #cc7b19;
+    border-color: #b56d16;
 }
 .btn-bright .badge {
-  color: #eee;
-  background-color: #cc7b19;
-  box-shadow: inset 0 1px 0 #e7993b;
+    color: #eee;
+    background-color: #cc7b19;
+    box-shadow: inset 0 1px 0 #e7993b;
 }
 .btn-danger.btn-edit {
     color: #d7d7d7;
@@ -468,14 +499,14 @@ fieldset[disabled] .btn-bright.active {
     border-color: #ac2925;
 }
 .btn-danger.btn-edit.active {
-  color: #eee;
-  background-color: #c9302c;
-  border-color: #ac2925;
+    color: #eee;
+    background-color: #c9302c;
+    border-color: #ac2925;
 }
 .btn-danger.btn-edit.active:hover {
-  color: #eee;
-  background-color: #ac2925;
-  border-color: #761c19;
+    color: #eee;
+    background-color: #ac2925;
+    border-color: #761c19;
 }
 .btn-group select {
     margin-top: 0;
@@ -548,6 +579,44 @@ fieldset[disabled] .btn-bright.active {
     border-radius: 0 0 3px 3px;
     border-top: 1px solid #1C1C1C;
 }
+#donation_type {
+    display: -webkit-flex;
+    display: flex;
+    -webkit-justify-content: center;
+    justify-content: center;
+    margin: 10px 0;
+}
+.donate-btn {
+    display: -webkit-inline-flex;
+    display: inline-flex;
+    -webkit-align-items: center;
+    align-items: center;
+    border-radius: 4px;
+    padding: 8px 12px;
+}
+.donate-btn-github {
+    border: none;
+    padding: 0 16px;
+    font-weight: 600;
+    height: 52px;
+    font-size: 16px;
+}
+.donate-btn-github img {
+    margin-right: 8px;
+}
+.donate-btn-patreon {
+    background-color: #fff;
+}
+.donate-btn-stripe {
+    background-color: #533AFD;
+}
+.donate-btn-paypal {
+    background-color: #60cdff;
+    padding: 10px 12px;
+}
+.donate-btn-paypal img {
+    margin-bottom: -4px;
+}
 textarea,
 input[type="text"],
 input[type="password"],
@@ -572,6 +641,28 @@ input[type="color"],
     padding: 6px 12px;
     background-color: #555;
     border-radius: 3px;
+    transition: background-color .3s;
+}
+textarea:focus,
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="datetime"]:focus,
+input[type="datetime-local"]:focus,
+input[type="date"]:focus,
+input[type="month"]:focus,
+input[type="time"]:focus,
+input[type="week"]:focus,
+input[type="number"]:focus,
+input[type="email"]:focus,
+input[type="url"]:focus,
+input[type="search"]:focus,
+input[type="tel"]:focus,
+input[type="color"]:focus,
+.uneditable-input:focus {
+    outline: 0;
+    outline: thin dotted \9;
+    color: #555;
+    background-color: #fff;
     transition: background-color .3s;
 }
 textarea.form-control {
@@ -656,12 +747,12 @@ textarea.form-control:focus {
     white-space: nowrap;
     vertical-align: middle;
     -ms-touch-action: manipulation;
-      touch-action: manipulation;
+    touch-action: manipulation;
     cursor: pointer;
     -webkit-user-select: none;
-     -moz-user-select: none;
-      -ms-user-select: none;
-          user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
     background-image: none;
     background-color: #3B3B3B;
     color: #e5e5e5;
@@ -676,6 +767,13 @@ textarea.form-control:focus {
 }
 .btn-form:focus {
     color: #eee;
+}
+.btn-filter.active,
+.btn-filter.active.focus {
+    background-color: #b7800a !important;
+}
+.btn-filter.active:hover {
+    background-color: #896007 !important;
 }
 .form-control-feedback {
     color: #E5A00D;
@@ -784,6 +882,7 @@ a .users-poster-face:hover {
     height: 235px;
     width: 100%;
     padding: 5px;
+    position: relative;
     overflow: hidden;
     -webkit-transition: background 1s linear;
     transition: background 1s linear;
@@ -910,6 +1009,11 @@ a .users-poster-face:hover {
     flex-grow: 1;
     z-index: 1;
 }
+.dashboard-activity-info-scroller.scroll-wrapper > .scroll-content {
+    width: 100% !important;
+    max-height: 100% !important;
+    scrollbar-width: none;
+}
 .dashboard-activity-info-scroller.scrollbar-macosx > .scroll-element.scroll-y {
     left: 10px;
 }
@@ -947,7 +1051,7 @@ a .users-poster-face:hover {
     font-size: 10px;
     text-align: right;
     text-transform: uppercase;
-    line-height: 14px;
+    line-height: 10px;
     -webkit-flex-shrink: 0;
     flex-shrink: 0;
 }
@@ -965,27 +1069,40 @@ a .users-poster-face:hover {
     white-space: nowrap;
 }
 .dashboard-activity-info-item .sub-value.time-right {
-    margin-right: 60px;
+    margin-right: 87px;
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
 }
+.dashboard-activity-info-item .sub-value.location-value {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
 .dashboard-activity-info-item .sub-value .ip-container {
     display: inline-flex;
+    min-width: 0;
 }
 .dashboard-activity-info-item .sub-value .ip-address {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 125px;
 }
 .dashboard-activity-info-time {
     position: absolute;
-    top: 200px;
+    bottom: 6px;
     right: 10px;
     text-align: right;
     font-size: 10px;
     z-index: 2;
+}
+.dashboard-activity-info-channel {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    max-width: 75px;
+    text-overflow: ellipsis;
+    overflow: hidden;
 }
 .dashboard-activity-progress {
     width: 100%;
@@ -1140,7 +1257,6 @@ a:hover .dashboard-activity-cover {
     -webkit-box-shadow: 0 0 4px rgba(0,0,0,.3),inset 0 0 0 1px rgba(255,255,255,.1);
     -moz-box-shadow: 0 0 4px rgba(0,0,0,.3),inset 0 0 0 1px rgba(255,255,255,.1);
     box-shadow: 0 0 4px rgba(0,0,0,.3),inset 0 0 0 1px rgba(255,255,255,.1);
-    overflow: hidden;
     float: right;
 }
 a .dashboard-activity-metadata-user-thumb:hover {
@@ -1257,7 +1373,7 @@ a .dashboard-activity-metadata-user-thumb:hover {
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
     z-index: 1;
-   -webkit-border-radius: 50%;
+    -webkit-border-radius: 50%;
     -moz-border-radius: 50%;
     border-radius: 350%;
     overflow: hidden;
@@ -1346,6 +1462,11 @@ a .dashboard-activity-metadata-user-thumb:hover {
     -webkit-flex-grow: 1;
     flex-grow: 1;
     z-index: 1;
+}
+.dashboard-stats-info-scroller.scroll-wrapper > .scroll-content {
+    width: 100% !important;
+    max-height: 100% !important;
+    scrollbar-width: none;
 }
 .dashboard-stats-info-scroller.scrollbar-macosx > .scroll-element.scroll-y {
     left: 10px;
@@ -1454,7 +1575,8 @@ a:hover .dashboard-stats-square {
     text-align: center;
     position: relative;
     z-index: 0;
-    overflow: hidden;
+    overflow: auto;
+    scrollbar-width: none;
 }
 .dashboard-recent-media {
     width: 100%;
@@ -1773,7 +1895,7 @@ a:hover .dashboard-recent-media-cover {
     text-align: center;
     display: block;
     position: absolute;
-    top: calc(50% - 34px);
+    top: calc(50% - 42px);
     width: 100%;
 }
 a:hover .summary-poster-face .summary-poster-face-overlay,
@@ -1827,15 +1949,32 @@ a:hover .summary-poster-face-track .summary-poster-face-overlay span {
     max-height: 15px;
     margin: 0 5px;
 }
-.summary-content-summary {
+.summary-content-text {
     overflow: hidden;
     color: #eee;
     float: left;
     position: relative;
     clear: both;
-    height: auto;
-    max-height: 160px;
-    padding-bottom: 0px;
+    padding-bottom: 0;
+}
+.summary-content-tagline {
+    font-weight: bold;
+}
+.summary-content-summary {
+    height: 60px;
+}
+.summary-content-summary p {
+    margin-bottom: 0;
+}
+.summary-toggle {
+    display: none;
+    margin-top: 10px;
+    font-size: 12px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+.summary-toggle a {
+    color: #999;
 }
 .summary-content-people-wrapper {
     margin-right: 20px;
@@ -2162,8 +2301,8 @@ span.settings-warning {
     padding-left: 10px;
 }
 #menu_link_show_advanced_settings.active {
-  color: #eee;
-  background-color: #cc7b19;
+    color: #eee;
+    background-color: #cc7b19;
 }
 #configUpdate .form-group,
 #configUpdate .checkbox{
@@ -2174,6 +2313,10 @@ span.settings-warning {
     overflow: hidden;
     padding-left: 10px;
     margin-left: -10px;
+}
+#newsletter_agent_options.hidden-settings {
+    padding-left: 15px;
+    margin-left: 0;
 }
 .advanced-setting {
     display: none;
@@ -2209,6 +2352,28 @@ li.advanced-setting {
     color: #eee;
     padding-top: 15px;
     padding-left: 105px;
+}
+.user-info-account {
+    margin-left: 10px;
+    font-size: 14px;
+    color: #999;
+}
+.user-info-account > span {
+    display: inline-block;
+    overflow-wrap: anywhere;
+}
+.user-info-account > span:not(:last-child):after {
+    content: " \00b7";
+}
+@media (max-width: 767px) {
+    .user-info-account,
+    .user-info-account > span {
+        display: block;
+        margin-left: 0;
+    }
+    .user-info-account > span:not(:last-child):after {
+        content: none;
+    }
 }
 .user-info-nav {
     margin-top: 15px;
@@ -2371,6 +2536,7 @@ a .library-user-instance-box:hover {
 }
 .home-padded-header {
     margin: 25px 0;
+    padding: 0;
     height: 34px;
 }
 .home-padded-header h3 {
@@ -2809,6 +2975,33 @@ a .home-platforms-list-cover-face:hover
     overflow: hidden;
     max-width: 350px;
 }
+.circle {
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 50%;
+    border: 0.2rem solid #eeeeee;
+}
+.circle-quarter {
+    background-image:
+    linear-gradient(00deg, #2b2b2b 50%, transparent 50%),
+    linear-gradient(270deg, #eeeeee 50%, transparent 50%);
+}
+.circle-half {
+    background-image:
+    linear-gradient(90deg, #2b2b2b 50%, transparent 50%),
+    linear-gradient(-90deg, #eeeeee 50%, transparent 50%);
+    }
+.circle-three-quarter {
+    background-image:
+    linear-gradient(180deg, transparent 50%, #eeeeee 50%),
+    linear-gradient(-90deg, #eeeeee 50%, transparent 50%);
+}
+.circle-full {
+    background: #eeeeee;
+}
+table.dataTable tbody td.watched-status {
+    padding-right: 10px;
+}
 #graph-tabs {
     padding-bottom: 10px;
     float: none;
@@ -2855,7 +3048,7 @@ a .home-platforms-list-cover-face:hover
     margin-top: 20px;
     margin-bottom: 20px;
     width: 100%;
-    max-width: 1750px;
+    max-width: max(1750px, 100% - 140px);
     overflow: hidden;
 }
 .table-card-header {
@@ -2868,8 +3061,8 @@ a .home-platforms-list-cover-face:hover
     margin-top: 20px;
     margin-bottom: -20px;
     width: 100%;
-    max-width: 1750px;
-    overflow: hidden;
+    max-width: max(1750px, 100% - 140px);
+    display: flow-root;
 }
 .table-card-back td {
     font-size: 12px;
@@ -2885,10 +3078,46 @@ a .home-platforms-list-cover-face:hover
 .button-bar {
     float: right;
 }
+@media only screen and (min-width: 741px) {
+    .table-card-header:has(> .button-bar) {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 15px;
+    }
+    .button-bar:has(> .btn-group, > .btn) {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 3px;
+    }
+    /* A flex item measures the search box narrower than it lays out, so it needs a set width. */
+    #update_search_form div.input-group {
+        width: 250px;
+    }
+}
 .colvis-button-bar,
 .refresh-users-button,
 .refresh-libraries-button {
     /*float: right;*/
+}
+/* The home page shows its sections top-down as they load. Only the first shows at first paint. */
+.home-section + .home-section {
+    display: none;
+}
+/* DataTables builds the table after the first paint. Hide the bare table until then. */
+.table-card-back > table.display:not(.dataTable) {
+    visibility: hidden;
+}
+/* bootstrap-select draws the user picker once the user names load. Until then hide the bare
+   list box and hold the picker's fixed 220px, so the header keeps its size. */
+#graph-user,
+#history-user {
+    display: none;
+}
+#user-selection:has(#graph-user, #history-user) {
+    min-width: 220px;
+    min-height: 34px;
 }
 .refresh-users-button,
 .refresh-libraries-button {
@@ -2939,14 +3168,15 @@ a .home-platforms-list-cover-face:hover
     max-width: 900px;
 }
 .stacked-configs > li > span {
-    display: block;
+    display: inline-block;
+    width: inherit;
     padding: 8px 20px 8px 15px;
     color: #eee;
     border-left: 2px solid #444;
     border-top: 1px solid #2d2d2d;
     -webkit-transition: all 0.3s ease;
-      -o-transition: all 0.3s ease;
-      transition: all 0.3s ease;
+    -o-transition: all 0.3s ease;
+    transition: all 0.3s ease;
 }
 .stacked-configs > li > span:hover,
 .stacked-configs > li > span:focus {
@@ -3054,6 +3284,14 @@ a .home-platforms-list-cover-face:hover
     background: #f9be03;
     color: #eee;
 }
+.submenu .alert a,
+.submenu .alert a:hover {
+    display: inline;
+    padding: 0;
+    background: none;
+    color: inherit;
+    text-decoration: underline;
+}
 .ajaxMsg {
     background-color: rgba(255,255,255,0.075);
     color: #999999;
@@ -3132,7 +3370,8 @@ div.dataTables_info {
 }
 .inactive-library-tooltip,
 .inactive-user-tooltip {
-    display: inline-block;
+    display: block;
+    overflow: hidden;
     position: relative;
     width: 100%;
     height: 100%;
@@ -3144,6 +3383,41 @@ div.dataTables_info {
     right: 0;
     bottom: 0;
     text-shadow: 0 0 2px rgba(0,0,0,.5);
+}
+tr.archived-user > td,
+tr.archived-library > td,
+tr.deleted-user > td,
+tr.deleted-library > td {
+    opacity: .5;
+}
+tr.archived-user:hover > td,
+tr.archived-library:hover > td,
+tr.deleted-user:hover > td,
+tr.deleted-library:hover > td {
+    opacity: 1;
+}
+/* A deleted row offers Restore in place of Delete and Purge */
+tr:not(.deleted-user) .restore-user,
+tr:not(.deleted-library) .restore-library {
+    display: none;
+}
+/* The hidden buttons keep their space and Restore takes the place of Delete, so the toggles line up */
+tr.deleted-user .delete-user,
+tr.deleted-user .purge-user,
+tr.deleted-library .delete-library,
+tr.deleted-library .purge-library {
+    visibility: hidden;
+}
+tr.deleted-user .restore-user,
+tr.deleted-library .restore-library {
+    position: absolute;
+    left: 0;
+    top: 3px;
+}
+/* An expanded history group is already dimmed, and its parent row shows the archive state */
+table[id^='history_child'] tr.archived-user > td,
+table[id^='history_child'] tr.archived-library > td {
+    opacity: 1;
 }
 .sign-out-tooltip:hover {
     color: #E5A00D;
@@ -3208,6 +3482,7 @@ div.dataTables_info {
 }
 .edit-user-toggles,
 .edit-library-toggles {
+    position: relative;
     padding-right: 10px;
 }
 .edit-user-toggles > input[type='checkbox'],
@@ -3224,6 +3499,11 @@ div.dataTables_info {
     color: #eee;
     cursor: pointer;
 }
+.edit-user-toggles > input[type='checkbox']:disabled + label,
+.edit-library-toggles > input[type='checkbox']:disabled + label {
+    color: #444;
+    cursor: default;
+}
 .edit-user-name > input[type='text'] {
     margin: 0;
 }
@@ -3236,8 +3516,10 @@ div.dataTables_info {
 }
 #users-to-delete > li,
 #users-to-purge > li,
+#users-to-restore > li,
 #libraries-to-delete > li,
-#libraries-to-purge > li {
+#libraries-to-purge > li,
+#libraries-to-restore > li {
     color: #e9a049;
 }
 #updatebar, #token_error_bar  {
@@ -3293,8 +3575,23 @@ div.dataTables_info {
     overflow: auto;
     -webkit-overflow-scrolling: touch;
 }
+/* With a mouse or trackpad the styled scrollbar takes up space. Always show it, so the page
+   does not narrow when the content grows past the window. The pages with a summary container
+   scroll it instead of the body container. */
+@media (hover: hover) and (pointer: fine) {
+    .body-container {
+        overflow-y: scroll;
+    }
+    .body-container:has(.summary-container) {
+        overflow-y: auto;
+    }
+    .summary-container {
+        overflow-y: scroll;
+    }
+}
 ::-webkit-scrollbar {
     width: 15px;
+    height: 15px;
 }
 ::-webkit-scrollbar-track {
     background-color: rgba(0,0,0,.2);
@@ -3370,31 +3667,18 @@ pre::-webkit-scrollbar-thumb {
 @media only screen
   and (min-width: 740px)
   and (max-width: 1280px) {
-    .header-bar {
-        display: block;
-        float: none !important;
-    }
-    .button-bar {
-        float: left !important;
-        clear: both;
-        margin-top: 5px;
-    }
-    .button-bar .btn-group,
-    .button-bar > button.btn {
-        margin-right: 3px;
-    }
-    .button-bar > div,
-    .button-bar > button,
-    .button-bar > span {
-        float: left !important;
+    .home-padded-header .button-bar > div,
+    .home-padded-header .button-bar > button,
+    .home-padded-header .button-bar > span {
         margin-top: 10px;
     }
-    .button-bar > div > button.btn {
+    .home-padded-header .button-bar > div > button.btn {
         float: left !important;
         clear: both !important;
     }
     .home-padded-header .button-bar {
         float: left !important;
+        clear: both;
         margin-top: 0;
         margin-bottom: 15px;
     }
@@ -3431,6 +3715,22 @@ pre::-webkit-scrollbar-thumb {
     -ms-transition: background 0.3s;
     -o-transition: background 0.3s;
     transition: background 0.3s;
+}
+@media (max-width: 767px) {
+    #search_form {
+        width: 100%;
+    }
+    #search_form span.input-textbox {
+        width: 100%;
+    }
+    #search_form #query {
+        width: 100%;
+        right: 0;
+    }
+    #search_form #query.active {
+        width: 100%;
+        right: 0px;
+    }
 }
 #update_search_form div.input-group {
     display: inline-table;
@@ -3639,10 +3939,6 @@ a.no-highlight:hover {
 }
 .login-container .form-group {
     margin-bottom: 20px;
-}
-.login-container .form-group label {
-    font-weight: 400;
-    color: #999;
 }
 .login-container .form-control {
     height: 38px;
@@ -3868,16 +4164,15 @@ a:hover .overlay-refresh-image:hover {
 #changelog-modal ul {
     padding-left: 20px;
 }
-.google-play-badge {
-    display:inline-block;
-    height:45px;
-    margin-top: 10px;
+.app-badge {
+    float: left;
+    display: inline-block;
+    height: 46px;
+    margin-right: 10px;
+    margin-bottom: 5px;
 }
-.google-play-badge img {
-    border: 1px solid #3B3B3B;
-    border-radius: 6px;
-    box-sizing: border-box;
-    height: 45px;
+.app-badge img {
+    height: 46px;
     vertical-align: middle;
 }
 
@@ -4243,6 +4538,10 @@ a:hover .overlay-refresh-image:hover {
 .stream-info tr:nth-child(even) td {
     background-color: rgba(255,255,255,0.010);
 }
+.stream-info td:nth-child(3),
+.stream-info th:nth-child(3) {
+    width: 25px;
+}
 .number-input {
     margin: 0 !important;
     width: 55px !important;
@@ -4488,4 +4787,75 @@ a.donate-with-crypto::after {
     opacity: 1;
     top: 0;
     left: 0;
+}
+#crypto-select {
+    width: 280px;
+    margin: 15px auto;
+}
+#crypto-qrcode {
+    width: 258px;
+    padding: 0;
+    margin: 15px auto;
+    line-height: 0;
+    text-align: center;
+    background-color: #eee;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    display: none;
+}
+#crypto-address {
+    margin: 15px auto;
+    text-align: center;
+    display: none;
+}
+
+#api_qr_code {
+    width: 100%;
+    padding: 0;
+    margin: 0 0 10px;
+    line-height: 0;
+    text-align: center;
+    background-color: #eee;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.docker-mount {
+    margin: 20px auto 0 auto;
+    position: relative;
+}
+
+/* Ace Editor Styles */
+#message-editor {
+    height: 300px;
+}
+/* Custom CSS to reduce Ace editor gutter width */
+#message-editor .ace_gutter-cell {
+    padding-left: 8px;
+    padding-right: 8px;
+}
+.editor-controls {
+    padding: 3px;
+    border-bottom: 1px solid #444; 
+}
+.editor-container {
+    background-color: #282828;
+    border: 1px solid #444;
+    border-radius: 3px;
+}
+.editor-control-btn {
+    margin-right: 1px;
+    width: 32px;
+    height: 32px;
+    padding: 6px;
+}
+.editor-control-btn:hover {
+    background-color: #555;
+    border-color: #777;
+}
+/* Responsive design for editor controls */
+@media (max-width: 768px) {
+    .editor-control-btn {
+        margin-right: 6px;
+    }
 }

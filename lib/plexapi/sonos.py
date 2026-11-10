@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
 import requests
-from plexapi import CONFIG, X_PLEX_IDENTIFIER
+
+from plexapi import CONFIG, X_PLEX_IDENTIFIER, TIMEOUT
 from plexapi.client import PlexClient
 from plexapi.exceptions import BadRequest
 from plexapi.playqueue import PlayQueue
@@ -14,7 +14,7 @@ class PlexSonosClient(PlexClient):
         speakers linked to your Plex account. It also requires remote access to
         be working properly.
 
-        More details on the Sonos integration are avaialble here:
+        More details on the Sonos integration are available here:
         https://support.plex.tv/articles/218237558-requirements-for-using-plex-for-sonos/
 
         The Sonos API emulates the Plex player control API closely:
@@ -38,15 +38,14 @@ class PlexSonosClient(PlexClient):
             server (:class:`~plexapi.server.PlexServer`): Server this client is connected to.
             session (:class:`~requests.Session`): Session object used for connection.
             title (str): Name of this Sonos speaker.
-            token (str): X-Plex-Token used for authenication
+            token (str): X-Plex-Token used for authentication
             _baseurl (str): Address of public Plex Sonos API endpoint.
             _commandId (int): Counter for commands sent to Plex API.
             _token (str): Token associated with linked Plex account.
             _session (obj): Requests session object used to access this client.
     """
 
-    def __init__(self, account, data):
-        self._data = data
+    def __init__(self, account, data, timeout=None):
         self.deviceClass = data.attrib.get("deviceClass")
         self.machineIdentifier = data.attrib.get("machineIdentifier")
         self.product = data.attrib.get("product")
@@ -65,6 +64,8 @@ class PlexSonosClient(PlexClient):
         self._last_call = 0
         self._proxyThroughServer = False
         self._showSecrets = CONFIG.get("log.show_secrets", "").lower() == "true"
+        self._timeout = timeout or TIMEOUT
+        self._timeline_cache_timestamp = 0
 
     def playMedia(self, media, offset=0, **params):
 
@@ -96,9 +97,7 @@ class PlexSonosClient(PlexClient):
                 {
                     "type": "music",
                     "providerIdentifier": "com.plexapp.plugins.library",
-                    "containerKey": "/playQueues/{}?own=1".format(
-                        playqueue.playQueueID
-                    ),
+                    "containerKey": f"/playQueues/{playqueue.playQueueID}?own=1",
                     "key": media.key,
                     "offset": offset,
                     "machineIdentifier": media._server.machineIdentifier,

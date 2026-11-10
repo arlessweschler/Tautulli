@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-
-
 class PlexApiException(Exception):
     """ Base class for all PlexAPI exceptions. """
     pass
@@ -28,4 +25,9 @@ class Unsupported(PlexApiException):
 
 class Unauthorized(BadRequest):
     """ Invalid username/password or token. """
+    pass
+
+
+class TwoFactorRequired(Unauthorized):
+    """ Two factor authentication required. """
     pass

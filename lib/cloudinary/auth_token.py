@@ -11,7 +11,10 @@ AUTH_TOKEN_UNSAFE_RE = r'([ "#%&\'\/:;<=>?@\[\\\]^`{\|}~]+)'
 
 
 def generate(url=None, acl=None, start_time=None, duration=None,
-             expiration=None, ip=None, key=None, token_name=AUTH_TOKEN_NAME):
+             expiration=None, ip=None, key=None, token_name=AUTH_TOKEN_NAME, **_):
+    start_time = _ensure_int(start_time)
+    duration = _ensure_int(duration)
+    expiration = _ensure_int(expiration)
 
     if expiration is None:
         if duration is not None:
@@ -20,6 +23,9 @@ def generate(url=None, acl=None, start_time=None, duration=None,
         else:
             raise Exception("Must provide either expiration or duration")
 
+    if url is None and acl is None:
+        raise Exception("Must provide either acl or url")
+
     token_parts = []
     if ip is not None:
         token_parts.append("ip=" + ip)
@@ -27,7 +33,9 @@ def generate(url=None, acl=None, start_time=None, duration=None,
         token_parts.append("st=%d" % start_time)
     token_parts.append("exp=%d" % expiration)
     if acl is not None:
-        token_parts.append("acl=%s" % _escape_to_lower(acl))
+        acl_list = acl if type(acl) is list else [acl]
+        acl_list = [_escape_to_lower(a) for a in acl_list] 
+        token_parts.append("acl=%s" % "!".join(acl_list))
     to_sign = list(token_parts)
     if url is not None and acl is None:
         to_sign.append("url=%s" % _escape_to_lower(url))
@@ -47,3 +55,22 @@ def _escape_to_lower(url):
     escaped_url = smart_escape(url, unsafe=AUTH_TOKEN_UNSAFE_RE)
     escaped_url = re.sub(r"%[0-9A-F]{2}", lambda x: x.group(0).lower(), escaped_url)
     return escaped_url
+
+def _ensure_int(value):
+    """
+    Ensures the input value is an integer.
+    Attempts to cast it to an integer if it is not already.
+
+    :param value: The value to ensure as an integer.
+    :type value: Any
+    :return: The integer value.
+    :rtype: int
+    :raises ValueError: If the value cannot be converted to an integer.
+    """
+    if isinstance(value, int) or not value:
+        return value
+
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        raise ValueError("Value '{}' must be an integer.".format(value))

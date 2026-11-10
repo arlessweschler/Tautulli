@@ -1,5 +1,5 @@
 # mako/codegen.py
-# Copyright 2006-2020 the Mako authors and contributors <see AUTHORS file>
+# Copyright 2006-2026 the Mako authors and contributors <see AUTHORS file>
 #
 # This module is part of Mako and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -12,21 +12,19 @@ import re
 import time
 
 from mako import ast
-from mako import compat
 from mako import exceptions
 from mako import filters
 from mako import parsetree
 from mako import util
 from mako.pygen import PythonPrinter
 
-
 MAGIC_NUMBER = 10
 
 # names which are hardwired into the
 # template and are not accessed via the
 # context itself
-TOPLEVEL_DECLARED = set(["UNDEFINED", "STOP_RENDERING"])
-RESERVED_NAMES = set(["context", "loop"]).union(TOPLEVEL_DECLARED)
+TOPLEVEL_DECLARED = {"UNDEFINED", "STOP_RENDERING"}
+RESERVED_NAMES = {"context", "loop"}.union(TOPLEVEL_DECLARED)
 
 
 def compile(  # noqa
@@ -39,20 +37,12 @@ def compile(  # noqa
     future_imports=None,
     source_encoding=None,
     generate_magic_comment=True,
-    disable_unicode=False,
     strict_undefined=False,
     enable_loop=True,
     reserved_names=frozenset(),
 ):
     """Generate module source code given a parsetree node,
-      uri, and optional source filename"""
-
-    # if on Py2K, push the "source_encoding" string to be
-    # a bytestring itself, as we will be embedding it into
-    # the generated source and we don't want to coerce the
-    # result into a unicode object, in "disable_unicode" mode
-    if not compat.py3k and isinstance(source_encoding, compat.text_type):
-        source_encoding = source_encoding.encode(source_encoding)
+    uri, and optional source filename"""
 
     buf = util.FastEncodingBuffer()
 
@@ -68,7 +58,6 @@ def compile(  # noqa
             future_imports,
             source_encoding,
             generate_magic_comment,
-            disable_unicode,
             strict_undefined,
             enable_loop,
             reserved_names,
@@ -78,7 +67,7 @@ def compile(  # noqa
     return buf.getvalue()
 
 
-class _CompileContext(object):
+class _CompileContext:
     def __init__(
         self,
         uri,
@@ -89,7 +78,6 @@ class _CompileContext(object):
         future_imports,
         source_encoding,
         generate_magic_comment,
-        disable_unicode,
         strict_undefined,
         enable_loop,
         reserved_names,
@@ -102,16 +90,14 @@ class _CompileContext(object):
         self.future_imports = future_imports
         self.source_encoding = source_encoding
         self.generate_magic_comment = generate_magic_comment
-        self.disable_unicode = disable_unicode
         self.strict_undefined = strict_undefined
         self.enable_loop = enable_loop
         self.reserved_names = reserved_names
 
 
-class _GenerateRenderMethod(object):
-
+class _GenerateRenderMethod:
     """A template visitor object which generates the
-       full module source for a template.
+    full module source for a template.
 
     """
 
@@ -196,7 +182,7 @@ class _GenerateRenderMethod(object):
 
         self.compiler.pagetag = None
 
-        class FindTopLevel(object):
+        class FindTopLevel:
             def visitInheritTag(s, node):
                 inherit.append(node)
 
@@ -392,7 +378,7 @@ class _GenerateRenderMethod(object):
                 identifiers = self.compiler.identifiers.branch(node)
                 self.in_def = True
 
-                class NSDefVisitor(object):
+                class NSDefVisitor:
                     def visitDefTag(s, node):
                         s.visitDefOrBase(node)
 
@@ -404,7 +390,7 @@ class _GenerateRenderMethod(object):
                             raise exceptions.CompileException(
                                 "Can't put anonymous blocks inside "
                                 "<%namespace>",
-                                **node.exception_kwargs
+                                **node.exception_kwargs,
                             )
                         self.write_inline_def(node, identifiers, nested=False)
                         export.append(node.funcname)
@@ -481,7 +467,7 @@ class _GenerateRenderMethod(object):
         """
 
         # collection of all defs available to us in this scope
-        comp_idents = dict([(c.funcname, c) for c in identifiers.defs])
+        comp_idents = {c.funcname: c for c in identifiers.defs}
         to_write = set()
 
         # write "context.get()" for all variables we are going to
@@ -714,7 +700,7 @@ class _GenerateRenderMethod(object):
         toplevel=False,
     ):
         """write a post-function decorator to replace a rendering
-            callable with a cached version of itself."""
+        callable with a cached version of itself."""
 
         self.printer.writeline("__M_%s = %s" % (name, name))
         cachekey = node_or_pagetag.parsed_attributes.get(
@@ -794,8 +780,6 @@ class _GenerateRenderMethod(object):
         def locate_encode(name):
             if re.match(r"decode\..+", name):
                 return "filters." + name
-            elif self.compiler.disable_unicode:
-                return filters.NON_UNICODE_ESCAPES.get(name, name)
             else:
                 return filters.DEFAULT_ESCAPES.get(name, name)
 
@@ -830,7 +814,6 @@ class _GenerateRenderMethod(object):
             )
             or len(self.compiler.default_filters)
         ):
-
             s = self.create_filter_callable(
                 node.escapes_code.args, "%s" % node.text, True
             )
@@ -853,21 +836,33 @@ class _GenerateRenderMethod(object):
                 text = node.text
             self.printer.writeline(text)
             children = node.get_children()
-            # this covers the three situations where we want to insert a pass:
-            #    1) a ternary control line with no children,
-            #    2) a primary control line with nothing but its own ternary
-            #          and end control lines, and
-            #    3) any control line with no content other than comments
-            if not children or (
-                compat.all(
+
+            # this covers the four situations where we want to insert a pass:
+            # 1) a ternary control line with no children,
+            # 2) a primary control line with nothing but its own ternary
+            #       and end control lines, and
+            # 3) any control line with no content other than comments
+            # 4) the first control block with no content other than comments
+            def _search_for_control_line():
+                for c in children:
+                    if isinstance(c, parsetree.Comment):
+                        continue
+                    elif isinstance(c, parsetree.ControlLine):
+                        return True
+                    return False
+
+            if (
+                not children
+                or all(
                     isinstance(c, (parsetree.Comment, parsetree.ControlLine))
                     for c in children
                 )
-                and compat.all(
+                and all(
                     (node.is_ternary(c.keyword) or c.isend)
                     for c in children
                     if isinstance(c, parsetree.ControlLine)
                 )
+                or _search_for_control_line()
             ):
                 self.printer.writeline("pass")
 
@@ -969,7 +964,7 @@ class _GenerateRenderMethod(object):
 
         self.identifier_stack.append(body_identifiers)
 
-        class DefVisitor(object):
+        class DefVisitor:
             def visitDefTag(s, node):
                 s.visitDefOrBase(node)
 
@@ -1025,8 +1020,7 @@ class _GenerateRenderMethod(object):
         )
 
 
-class _Identifiers(object):
-
+class _Identifiers:
     """tracks the status of identifier names as template code is rendered."""
 
     def __init__(self, compiler, node=None, parent=None, nested=False):
@@ -1098,7 +1092,7 @@ class _Identifiers(object):
 
     def branch(self, node, **kwargs):
         """create a new Identifiers for a new Node, with
-          this Identifiers as the parent."""
+        this Identifiers as the parent."""
 
         return _Identifiers(self.compiler, node, self, **kwargs)
 
@@ -1123,7 +1117,7 @@ class _Identifiers(object):
 
     def check_declared(self, node):
         """update the state of this Identifiers with the undeclared
-            and declared identifiers of the given node."""
+        and declared identifiers of the given node."""
 
         for ident in node.undeclared_identifiers():
             if ident != "context" and ident not in self.declared.union(
@@ -1170,7 +1164,7 @@ class _Identifiers(object):
             raise exceptions.CompileException(
                 "%%def or %%block named '%s' already "
                 "exists in this template." % node.funcname,
-                **node.exception_kwargs
+                **node.exception_kwargs,
             )
 
     def visitDefTag(self, node):
@@ -1195,12 +1189,11 @@ class _Identifiers(object):
 
     def visitBlockTag(self, node):
         if node is not self.node and not node.is_anonymous:
-
             if isinstance(self.node, parsetree.DefTag):
                 raise exceptions.CompileException(
                     "Named block '%s' not allowed inside of def '%s'"
                     % (node.name, self.node.name),
-                    **node.exception_kwargs
+                    **node.exception_kwargs,
                 )
             elif isinstance(
                 self.node, (parsetree.CallTag, parsetree.CallNamespaceTag)
@@ -1208,7 +1201,7 @@ class _Identifiers(object):
                 raise exceptions.CompileException(
                     "Named block '%s' not allowed inside of <%%call> tag"
                     % (node.name,),
-                    **node.exception_kwargs
+                    **node.exception_kwargs,
                 )
 
         for ident in node.undeclared_identifiers():
@@ -1265,8 +1258,13 @@ class _Identifiers(object):
 
 
 _FOR_LOOP = re.compile(
-    r"^for\s+((?:\(?)\s*[A-Za-z_][A-Za-z_0-9]*"
-    r"(?:\s*,\s*(?:[A-Za-z_][A-Za-z0-9_]*),??)*\s*(?:\)?))\s+in\s+(.*):"
+    r"^for\s+((?:\(?)\s*"
+    r"(?:\(?)\s*[A-Za-z_][A-Za-z_0-9]*"
+    r"(?:\s*,\s*(?:[A-Za-z_][A-Za-z_0-9]*),??)*\s*(?:\)?)"
+    r"(?:\s*,\s*(?:"
+    r"(?:\(?)\s*[A-Za-z_][A-Za-z_0-9]*"
+    r"(?:\s*,\s*(?:[A-Za-z_][A-Za-z_0-9]*),??)*\s*(?:\)?)"
+    r"),??)*\s*(?:\)?))\s+in\s+(.*):"
 )
 
 
@@ -1282,7 +1280,7 @@ def mangle_mako_loop(node, printer):
         if match:
             printer.writelines(
                 "loop = __M_loop._enter(%s)" % match.group(2),
-                "try:"
+                "try:",
                 # 'with __M_loop(%s) as loop:' % match.group(2)
             )
             text = "for %s in loop:" % match.group(1)
@@ -1293,8 +1291,7 @@ def mangle_mako_loop(node, printer):
     return text
 
 
-class LoopVariable(object):
-
+class LoopVariable:
     """A node visitor which looks for the name 'loop' within undeclared
     identifiers."""
 

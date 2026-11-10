@@ -6,21 +6,17 @@ import mimetypes
 import socket
 import sys
 from unittest import mock
-
-import six
-from six.moves.http_client import HTTPConnection
-from six.moves import urllib
+import urllib.parse
+from http.client import HTTPConnection
 
 import cherrypy
-from cherrypy._cpcompat import HTTPSConnection, quote
+from cherrypy._cpcompat import HTTPSConnection
 
 from cherrypy.test import helper
 
 
 def is_ascii(text):
-    """
-    Return True if the text encodes as ascii.
-    """
+    """Return True if the text encodes as ascii."""
     try:
         text.encode('ascii')
         return True
@@ -30,13 +26,13 @@ def is_ascii(text):
 
 
 def encode_filename(filename):
-    """
-    Given a filename to be used in a multipart/form-data,
-    encode the name. Return the key and encoded filename.
+    """Given a filename to be used in a multipart/form-data, encode the name.
+
+    Return the key and encoded filename.
     """
     if is_ascii(filename):
         return 'filename', '"{filename}"'.format(**locals())
-    encoded = quote(filename, encoding='utf-8')
+    encoded = urllib.parse.quote(filename, encoding='utf-8')
     return 'filename*', "'".join((
         'UTF-8',
         '',  # lang
@@ -105,20 +101,18 @@ class HTTPTests(helper.CPWebCase):
                         count += 1
                     else:
                         if count:
-                            if six.PY3:
-                                curchar = chr(curchar)
+                            curchar = chr(curchar)
                             summary.append('%s * %d' % (curchar, count))
                         count = 1
                         curchar = c
                 if count:
-                    if six.PY3:
-                        curchar = chr(curchar)
+                    curchar = chr(curchar)
                     summary.append('%s * %d' % (curchar, count))
                 return ', '.join(summary)
 
             @cherrypy.expose
             def post_filename(self, myfile):
-                '''Return the name of the file which was uploaded.'''
+                """Return the name of the file which was uploaded."""
                 return myfile.filename
 
         cherrypy.tree.mount(Root())
@@ -139,6 +133,9 @@ class HTTPTests(helper.CPWebCase):
         self.status = str(response.status)
         self.assertStatus(200)
         self.assertBody(b'Hello world!')
+
+        response.close()
+        c.close()
 
         # Now send a message that has no Content-Length, but does send a body.
         # Verify that CP times out the socket and responds
@@ -162,6 +159,9 @@ class HTTPTests(helper.CPWebCase):
         self.body = response.fp.read()
         self.status = str(response.status)
         self.assertStatus(411)
+
+        response.close()
+        c.close()
 
     def test_post_multipart(self):
         alphabet = 'abcdefghijklmnopqrstuvwxyz'
@@ -188,13 +188,18 @@ class HTTPTests(helper.CPWebCase):
         parts = ['%s * 65536' % ch for ch in alphabet]
         self.assertBody(', '.join(parts))
 
+        response.close()
+        c.close()
+
     def test_post_filename_with_special_characters(self):
-        '''Testing that we can handle filenames with special characters. This
-        was reported as a bug in:
-           https://github.com/cherrypy/cherrypy/issues/1146/
-           https://github.com/cherrypy/cherrypy/issues/1397/
-           https://github.com/cherrypy/cherrypy/issues/1694/
-        '''
+        """Testing that we can handle filenames with special characters.
+
+        This was reported as a bug in:
+
+        * https://github.com/cherrypy/cherrypy/issues/1146/
+        * https://github.com/cherrypy/cherrypy/issues/1397/
+        * https://github.com/cherrypy/cherrypy/issues/1694/
+        """
         # We'll upload a bunch of files with differing names.
         fnames = [
             'boop.csv', 'foo, bar.csv', 'bar, xxxx.csv', 'file"name.csv',
@@ -218,6 +223,9 @@ class HTTPTests(helper.CPWebCase):
             self.status = str(response.status)
             self.assertStatus(200)
             self.assertBody(fname)
+
+            response.close()
+            c.close()
 
     def test_malformed_request_line(self):
         if getattr(cherrypy.server, 'using_apache', False):
@@ -265,6 +273,9 @@ class HTTPTests(helper.CPWebCase):
         self.assertStatus(400)
         self.body = response.fp.read(20)
         self.assertBody('Illegal header line.')
+
+        response.close()
+        c.close()
 
     def test_http_over_https(self):
         if self.scheme != 'https':

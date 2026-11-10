@@ -15,24 +15,28 @@
 #  You should have received a copy of the GNU General Public License
 #  along with PlexPy.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import object
-from future.builtins import str
-
+from http.cookiejar import DefaultCookiePolicy
 from multiprocessing.dummy import Pool as ThreadPool
-from future.moves.urllib.parse import urljoin
+from urllib.parse import urljoin
 
-import certifi
 import requests
+import requests.adapters
 import urllib3
 
 import plexpy
-if plexpy.PYTHON2:
-    import helpers
-    import logger
-else:
-    from plexpy import helpers
-    from plexpy import logger
+from plexpy import helpers
+from plexpy import logger
+
+
+# One shared session so every PMS/plex.tv operation reuses pooled
+# TCP/TLS connections instead of paying a fresh handshake per call.
+# Authentication is per-request via the X-Plex-Token header; cookie
+# storage is disabled so requests are fully independent.
+_session = requests.Session()
+_session.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+_adapter = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=25)
+_session.mount('http://', _adapter)
+_session.mount('https://', _adapter)
 
 
 class HTTPHandler(object):
@@ -55,21 +59,26 @@ class HTTPHandler(object):
             self.headers = {
                 'X-Plex-Product': plexpy.common.PRODUCT,
                 'X-Plex-Version': plexpy.common.RELEASE,
-                'X-Plex-Client-Identifier': plexpy.CONFIG.PMS_UUID,
+                'X-Plex-Client-Identifier': plexpy.CONFIG.PMS_CLIENT_ID or plexpy.CONFIG.PMS_UUID,
                 'X-Plex-Platform': plexpy.common.PLATFORM,
                 'X-Plex-Platform-Version': plexpy.common.PLATFORM_RELEASE,
                 'X-Plex-Device': '{} {}'.format(plexpy.common.PLATFORM,
                                                 plexpy.common.PLATFORM_RELEASE),
-                'X-Plex-Device-Name': plexpy.common.PLATFORM_DEVICE_NAME
+                'X-Plex-Device-Name': '{} ({})'.format(plexpy.common.PLATFORM_DEVICE_NAME,
+                                                       plexpy.common.PRODUCT),
+                'X-Plex-Language': plexpy.CONFIG.PMS_LANGUAGE or plexpy.SYS_LANGUAGE
             }
 
         self.token = token
         if self.token:
             self.headers['X-Plex-Token'] = self.token
 
-        self._session = requests.Session()
+        self._default_timeout = timeout
         self.timeout = timeout
-        self.ssl_verify = certifi.where() if ssl_verify else False
+        # verify=True lets requests reuse its preloaded default SSL context
+        # (same certifi bundle); passing the bundle path forces the CA PEM
+        # to be re-parsed for every new connection
+        self.ssl_verify = bool(ssl_verify)
         if not self.ssl_verify:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -80,7 +89,9 @@ class HTTPHandler(object):
         self.return_response = False
         self.return_type = False
         self.callback = None
+        self.raise_errors = True
         self.request_kwargs = {}
+        self.request_headers = self.headers
 
     def make_request(self,
                      uri=None,
@@ -93,6 +104,7 @@ class HTTPHandler(object):
                      no_token=False,
                      timeout=None,
                      callback=None,
+                     raise_errors=True,
                      **request_kwargs):
         """
         Handle the HTTP requests.
@@ -107,20 +119,26 @@ class HTTPHandler(object):
         self.return_response = return_response
         self.return_type = return_type
         self.callback = callback
-        self.timeout = timeout or self.timeout
+        self.raise_errors = raise_errors
+        self.timeout = timeout or self._default_timeout
         self.request_kwargs = request_kwargs
 
         if self.request_type not in self._valid_request_types:
-            logger.debug("HTTP request made but unsupported request type given.")
+            logger.warn("HTTP request made but unsupported request type given.")
             return None
 
         if uri:
             request_urls = [urljoin(str(url), self.uri) for url in self.urls]
 
+            # Build the headers per request instead of mutating the
+            # handler's base headers (no_token would otherwise remove the
+            # token for all later requests on this handler)
+            request_headers = dict(self.headers)
             if no_token:
-                self.headers.pop('X-Plex-Token', None)
+                request_headers.pop('X-Plex-Token', None)
             if headers:
-                self.headers.update(headers)
+                request_headers.update(headers)
+            self.request_headers = request_headers
 
             responses = []
             for r in self._http_requests_pool(request_urls):
@@ -129,7 +147,7 @@ class HTTPHandler(object):
             return responses[0]
 
         else:
-            logger.debug("HTTP request made but no uri endpoint provided.")
+            logger.warn("HTTP request made but no uri endpoint provided.")
             return None
 
     def _http_requests_pool(self, urls, workers=10, chunk=None):
@@ -152,7 +170,7 @@ class HTTPHandler(object):
                     yield work
             except Exception as e:
                 if not self._silent:
-                    logger.error("Failed to yield request: %s" % e)
+                    logger.exception("Failed to yield request: %s" % e)
             finally:
                 pool.close()
                 pool.join()
@@ -162,9 +180,10 @@ class HTTPHandler(object):
         err = False
         error_msg = "Failed to access uri endpoint %s. " % self.uri
         try:
-            r = self._session.request(self.request_type, url, headers=self.headers, data=self.data,
-                                      timeout=self.timeout, verify=self.ssl_verify, **self.request_kwargs)
-            r.raise_for_status()
+            r = _session.request(self.request_type, url, headers=self.request_headers, data=self.data,
+                                 timeout=self.timeout, verify=self.ssl_verify, **self.request_kwargs)
+            if self.raise_errors:
+                r.raise_for_status()
         except requests.exceptions.Timeout as e:
             err = True
             if not self._silent:
@@ -186,7 +205,7 @@ class HTTPHandler(object):
             if not self._silent:
                 logger.error(error_msg + "Uncaught exception: %s", e)
 
-        if self.return_response:
+        if not err and self.return_response:
             return r
         elif err:
             return None

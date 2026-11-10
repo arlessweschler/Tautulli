@@ -13,25 +13,19 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import object
-from future.builtins import str
-
 import os
 import re
 import shutil
 import time
 import threading
+import zipfile
 
 from configobj import ConfigObj, ParseError
+from hashing_passwords import make_hash
 
 import plexpy
-if plexpy.PYTHON2:
-    import helpers
-    import logger
-else:
-    from plexpy import helpers
-    from plexpy import logger
+from plexpy import helpers
+from plexpy import logger
 
 
 def bool_int(value):
@@ -48,14 +42,18 @@ FILENAME = "config.ini"
 
 _CONFIG_DEFINITIONS = {
     'ALLOW_GUEST_ACCESS': (int, 'General', 0),
+    'ALLOW_MOUNTED_FOLDERS': (int, 'Advanced', 0),
+    'ALLOW_PUBLIC_NO_PASSWORD': (int, 'Advanced', 0),
     'DATE_FORMAT': (str, 'General', 'YYYY-MM-DD'),
+    'PMS_CLIENT_ID': (str, 'PMS', ''),
     'PMS_IDENTIFIER': (str, 'PMS', ''),
     'PMS_IP': (str, 'PMS', '127.0.0.1'),
-    'PMS_IS_CLOUD': (int, 'PMS', 0),
     'PMS_IS_REMOTE': (int, 'PMS', 0),
+    'PMS_LANGUAGE': (str, 'PMS', ''),
     'PMS_LOGS_FOLDER': (str, 'PMS', ''),
     'PMS_LOGS_LINE_CAP': (int, 'PMS', 1000),
     'PMS_NAME': (str, 'PMS', ''),
+    'PMS_NAME_OVERRIDE': (str, 'PMS', ''),
     'PMS_PORT': (int, 'PMS', 32400),
     'PMS_TOKEN': (str, 'PMS', ''),
     'PMS_SSL': (int, 'PMS', 0),
@@ -74,10 +72,12 @@ _CONFIG_DEFINITIONS = {
     'PMS_UPDATE_CHECK_INTERVAL': (int, 'Advanced', 24),
     'PMS_WEB_URL': (str, 'PMS', 'https://app.plex.tv/desktop'),
     'TIME_FORMAT': (str, 'General', 'HH:mm'),
-    'ANON_REDIRECT': (str, 'General', 'https://www.nullrefer.com/?'),
+    'ANON_REDIRECT': (str, 'General', ''),
+    'ANON_REDIRECT_DYNAMIC': (int, 'General', 1),
     'API_ENABLED': (int, 'General', 1),
     'API_KEY': (str, 'General', ''),
     'API_SQL': (int, 'General', 0),
+    'AUTO_UNARCHIVE_USERS': (int, 'Monitoring', 1),
     'BUFFER_THRESHOLD': (int, 'Monitoring', 10),
     'BUFFER_WAIT': (int, 'Monitoring', 900),
     'BACKUP_DAYS': (int, 'General', 3),
@@ -86,8 +86,9 @@ _CONFIG_DEFINITIONS = {
     'CACHE_DIR': (str, 'General', ''),
     'CACHE_IMAGES': (int, 'General', 1),
     'CACHE_SIZEMB': (int, 'Advanced', 32),
+    'CHECK_DOCKER_MOUNT': (int, 'Advanced', 1),
     'CHECK_GITHUB': (int, 'General', 1),
-    'CHECK_GITHUB_INTERVAL': (int, 'General', 360),
+    'CHECK_GITHUB_INTERVAL': (int, 'General', 6),
     'CHECK_GITHUB_ON_STARTUP': (int, 'General', 1),
     'CHECK_GITHUB_CACHE_SECONDS': (int, 'Advanced', 3600),
     'CLEANUP_FILES': (int, 'General', 0),
@@ -112,7 +113,7 @@ _CONFIG_DEFINITIONS = {
     'GROUP_HISTORY_TABLES': (int, 'General', 1),
     'HISTORY_TABLE_ACTIVITY': (int, 'General', 1),
     'HOME_SECTIONS': (list, 'General', ['current_activity', 'watch_stats', 'library_stats', 'recently_added']),
-    'HOME_LIBRARY_CARDS': (list, 'General', ['first_run']),
+    'HOME_LIBRARY_CARDS': (list, 'General', []),
     'HOME_STATS_CARDS': (list, 'General', ['top_movies', 'popular_movies', 'top_tv', 'popular_tv', 'top_music',
         'popular_music', 'last_watched', 'top_libraries', 'top_users', 'top_platforms', 'most_concurrent']),
     'HOME_REFRESH_INTERVAL': (int, 'General', 10),
@@ -122,17 +123,20 @@ _CONFIG_DEFINITIONS = {
     'HTTPS_KEY': (str, 'General', ''),
     'HTTPS_DOMAIN': (str, 'General', 'localhost'),
     'HTTPS_IP': (str, 'General', '127.0.0.1'),
+    'HTTPS_MIN_TLS_VERSION': (str, 'Advanced', 'TLSv1.2'),
     'HTTP_BASIC_AUTH': (int, 'General', 0),
     'HTTP_ENVIRONMENT': (str, 'General', 'production'),
-    'HTTP_HASH_PASSWORD': (int, 'General', 0),
-    'HTTP_HASHED_PASSWORD': (int, 'General', 0),
+    'HTTP_GENERATED_PASSWORD': (str, 'General', ''),
+    'HTTP_HASH_PASSWORD': (int, 'General', 1),
+    'HTTP_HASHED_PASSWORD': (int, 'General', 1),
     'HTTP_HOST': (str, 'General', '0.0.0.0'),
     'HTTP_PASSWORD': (str, 'General', ''),
     'HTTP_PORT': (int, 'General', 8181),
     'HTTP_PROXY': (int, 'General', 0),
     'HTTP_ROOT': (str, 'General', ''),
     'HTTP_USERNAME': (str, 'General', ''),
-    'HTTP_PLEX_ADMIN': (int, 'General', 0),
+    'HTTP_PLEX_ADMIN': (int, 'General', 1),
+    'ALLOW_TAUTULLI_LOGIN': (int, 'General', 1),
     'HTTP_BASE_URL': (str, 'General', ''),
     'HTTP_RATE_LIMIT_ATTEMPTS': (int, 'General', 10),
     'HTTP_RATE_LIMIT_ATTEMPTS_INTERVAL': (int, 'General', 300),
@@ -144,7 +148,9 @@ _CONFIG_DEFINITIONS = {
     'LAUNCH_BROWSER': (int, 'General', 1),
     'LAUNCH_STARTUP': (int, 'General', 1),
     'LOG_BLACKLIST': (int, 'General', 1),
+    'LOG_BLACKLIST_USERNAMES': (int, 'General', 1),
     'LOG_DIR': (str, 'General', ''),
+    'LOG_LOGIN_IP': (int, 'General', 0),
     'LOGGING_IGNORE_INTERVAL': (int, 'Monitoring', 120),
     'METADATA_CACHE_SECONDS': (int, 'Advanced', 1800),
     'MOVIE_WATCHED_PERCENT': (int, 'Monitoring', 85),
@@ -170,16 +176,19 @@ _CONFIG_DEFINITIONS = {
     'NOTIFY_RECENTLY_ADDED_UPGRADE': (int, 'Monitoring', 0),
     'NOTIFY_REMOTE_ACCESS_THRESHOLD': (int, 'Monitoring', 60),
     'NOTIFY_CONCURRENT_BY_IP': (int, 'Monitoring', 0),
+    'NOTIFY_CONCURRENT_IPV6_CIDR': (str, 'Monitoring', '/64'),
     'NOTIFY_CONCURRENT_THRESHOLD': (int, 'Monitoring', 2),
     'NOTIFY_NEW_DEVICE_INITIAL_ONLY': (int, 'Monitoring', 1),
     'NOTIFY_SERVER_CONNECTION_THRESHOLD': (int, 'Monitoring', 60),
     'NOTIFY_SERVER_UPDATE_REPEAT': (int, 'Monitoring', 0),
     'NOTIFY_PLEXPY_UPDATE_REPEAT': (int, 'Monitoring', 0),
+    'NOTIFY_TEXT_EVAL': (int, 'Advanced', 0),
     'PLEXPY_AUTO_UPDATE': (int, 'General', 0),
     'REFRESH_LIBRARIES_INTERVAL': (int, 'Monitoring', 12),
     'REFRESH_LIBRARIES_ON_STARTUP': (int, 'Monitoring', 1),
     'REFRESH_USERS_INTERVAL': (int, 'Monitoring', 12),
     'REFRESH_USERS_ON_STARTUP': (int, 'Monitoring', 1),
+    'REMOTE_APP_PUSH_URL': (str, 'Advanced', 'https://relay.tautulliremote.com'),
     'SESSION_DB_WRITE_ATTEMPTS': (int, 'Advanced', 5),
     'SHOW_ADVANCED_SETTINGS': (int, 'General', 0),
     'SYNCHRONOUS_MODE': (str, 'Advanced', 'NORMAL'),
@@ -189,9 +198,9 @@ _CONFIG_DEFINITIONS = {
     'TV_WATCHED_PERCENT': (int, 'Monitoring', 85),
     'UPDATE_DB_INTERVAL': (int, 'General', 24),
     'UPDATE_SHOW_CHANGELOG': (int, 'General', 1),
-    'UPGRADE_FLAG': (int, 'Advanced', 0),
     'VERBOSE_LOGS': (int, 'Advanced', 1),
     'VERIFY_SSL_CERT': (bool_int, 'Advanced', 1),
+    'WATCHED_MARKER': (int, 'Monitoring', 3),
     'WEBSOCKET_MONITOR_PING_PONG': (int, 'Advanced', 0),
     'WEBSOCKET_CONNECTION_ATTEMPTS': (int, 'Advanced', 5),
     'WEBSOCKET_CONNECTION_TIMEOUT': (int, 'Advanced', 5),
@@ -200,6 +209,7 @@ _CONFIG_DEFINITIONS = {
     'JWT_UPDATE_SECRET': (bool_int, 'Advanced', 0),
     'SYSTEM_ANALYTICS': (int, 'Advanced', 1),
     'SYS_TRAY_ICON': (int, 'General', 1),
+    'X_FRAME_OPTIONS': (str, 'Advanced', 'SAMEORIGIN'),
 }
 
 _BLACKLIST_KEYS = ['_APITOKEN', '_TOKEN', '_KEY', '_SECRET', '_PASSWORD', '_APIKEY', '_ID', '_HOOK']
@@ -209,15 +219,137 @@ _DO_NOT_IMPORT_KEYS = [
     'FIRST_RUN_COMPLETE', 'GET_FILE_SIZES_HOLD', 'GIT_PATH', 'PMS_LOGS_FOLDER',
     'BACKUP_DIR', 'CACHE_DIR', 'EXPORT_DIR', 'LOG_DIR', 'NEWSLETTER_DIR', 'NEWSLETTER_CUSTOM_DIR',
     'HTTP_HOST', 'HTTP_PORT', 'HTTP_ROOT',
-    'HTTP_USERNAME', 'HTTP_PASSWORD', 'HTTP_HASH_PASSWORD', 'HTTP_HASHED_PASSWORD',
-    'ENABLE_HTTPS', 'HTTPS_CREATE_CERT', 'HTTPS_CERT', 'HTTPS_CERT_CHAIN', 'HTTPS_KEY'
+    'HTTP_USERNAME', 'HTTP_PASSWORD', 'HTTP_HASH_PASSWORD', 'HTTP_HASHED_PASSWORD', 'HTTP_GENERATED_PASSWORD',
+    'ENABLE_HTTPS', 'HTTPS_CREATE_CERT', 'HTTPS_CERT', 'HTTPS_CERT_CHAIN', 'HTTPS_KEY',
+    'PMS_TOKEN', 'JWT_SECRET'
 ]
 _DO_NOT_IMPORT_KEYS_DOCKER = [
     'PLEXPY_AUTO_UPDATE', 'GIT_REMOTE', 'GIT_BRANCH'
 ]
+_DO_NOT_DOWNLOAD_KEYS = [
+    'PMS_TOKEN', 'JWT_SECRET'
+]
 
 IS_IMPORTING = False
 IMPORT_THREAD = None
+# A signal handler runs shutdown(), which writes the config on the thread that may be writing
+WRITE_LOCK = threading.RLock()
+
+SETTINGS = [
+    'ANON_REDIRECT',
+    'API_KEY',
+    'BACKUP_DAYS',
+    'BACKUP_DIR',
+    'BACKUP_INTERVAL',
+    'BUFFER_THRESHOLD',
+    'BUFFER_WAIT',
+    'CACHE_DIR',
+    'CHECK_GITHUB_INTERVAL',
+    'CLOUDINARY_API_KEY',
+    'CLOUDINARY_API_SECRET',
+    'CLOUDINARY_CLOUD_NAME',
+    'DATE_FORMAT',
+    'EXPORT_DIR',
+    'GIT_BRANCH',
+    'GIT_PATH',
+    'GIT_REMOTE',
+    'GIT_TOKEN',
+    'HOME_LIBRARY_CARDS',
+    'HOME_REFRESH_INTERVAL',
+    'HOME_SECTIONS',
+    'HOME_STATS_CARDS',
+    'HTTPS_CERT',
+    'HTTPS_CERT_CHAIN',
+    'HTTPS_DOMAIN',
+    'HTTPS_IP',
+    'HTTPS_KEY',
+    'HTTP_BASE_URL',
+    'HTTP_PASSWORD',
+    'HTTP_PORT',
+    'HTTP_ROOT',
+    'HTTP_USERNAME',
+    'IMGUR_CLIENT_ID',
+    'LOGGING_IGNORE_INTERVAL',
+    'LOG_DIR',
+    'MOVIE_WATCHED_PERCENT',
+    'MUSIC_WATCHED_PERCENT',
+    'NEWSLETTER_AUTH',
+    'NEWSLETTER_CUSTOM_DIR',
+    'NEWSLETTER_DIR',
+    'NEWSLETTER_PASSWORD',
+    'NOTIFY_CONCURRENT_THRESHOLD',
+    'NOTIFY_CONTINUED_SESSION_THRESHOLD',
+    'NOTIFY_RECENTLY_ADDED_DELAY',
+    'NOTIFY_REMOTE_ACCESS_THRESHOLD',
+    'NOTIFY_SERVER_CONNECTION_THRESHOLD',
+    'NOTIFY_UPLOAD_POSTERS',
+    'PMS_CLIENT_ID',
+    'PMS_IDENTIFIER',
+    'PMS_IP',
+    'PMS_IS_REMOTE',
+    'PMS_LOGS_FOLDER',
+    'PMS_NAME',
+    'PMS_PORT',
+    'PMS_SSL',
+    'PMS_UPDATE_CHANNEL',
+    'PMS_UPDATE_CHECK_INTERVAL',
+    'PMS_UPDATE_DISTRO',
+    'PMS_UPDATE_DISTRO_BUILD',
+    'PMS_URL',
+    'PMS_VERSION',
+    'PMS_WEB_URL',
+    'REFRESH_LIBRARIES_INTERVAL',
+    'REFRESH_USERS_INTERVAL',
+    'SHOW_ADVANCED_SETTINGS',
+    'TIME_FORMAT',
+    'TV_WATCHED_PERCENT',
+    'WATCHED_MARKER',
+    'X_FRAME_OPTIONS',
+]
+
+CHECKED_SETTINGS = [
+    'ALLOW_GUEST_ACCESS',
+    'ANON_REDIRECT_DYNAMIC',
+    'API_ENABLED',
+    'AUTO_UNARCHIVE_USERS',
+    'CACHE_IMAGES',
+    'CHECK_GITHUB',
+    'ENABLE_HTTPS',
+    'GET_FILE_SIZES',
+    'GROUP_HISTORY_TABLES',
+    'HISTORY_TABLE_ACTIVITY',
+    'HTTPS_CREATE_CERT',
+    'HTTP_PLEX_ADMIN',
+    'ALLOW_TAUTULLI_LOGIN',
+    'HTTP_PROXY',
+    'LAUNCH_BROWSER',
+    'LAUNCH_STARTUP',
+    'LOG_BLACKLIST',
+    'LOG_BLACKLIST_USERNAMES',
+    'LOG_LOGIN_IP',
+    'MONITOR_PMS_UPDATES',
+    'MUSICBRAINZ_LOOKUP',
+    'NEWSLETTER_INLINE_STYLES',
+    'NEWSLETTER_SELF_HOSTED',
+    'NOTIFY_CONCURRENT_BY_IP',
+    'NOTIFY_CONSECUTIVE',
+    'NOTIFY_GROUP_RECENTLY_ADDED_GRANDPARENT',
+    'NOTIFY_GROUP_RECENTLY_ADDED_PARENT',
+    'NOTIFY_NEW_DEVICE_INITIAL_ONLY',
+    'NOTIFY_PLEXPY_UPDATE_REPEAT',
+    'NOTIFY_RECENTLY_ADDED_UPGRADE',
+    'NOTIFY_SERVER_UPDATE_REPEAT',
+    'PLEXPY_AUTO_UPDATE',
+    'PMS_URL_MANUAL',
+    'REFRESH_LIBRARIES_ON_STARTUP',
+    'REFRESH_USERS_ON_STARTUP',
+    'SYS_TRAY_ICON',
+    'THEMOVIEDB_LOOKUP',
+    'TVMAZE_LOOKUP',
+    'WEEK_START_MONDAY',
+    'SYSTEM_ANALYTICS',
+    'VERBOSE_LOGS',
+]
 
 
 def set_is_importing(value):
@@ -242,6 +374,14 @@ def import_tautulli_config(config=None, backup=False):
                     "Please wait until it is complete before importing another config.")
         return False
 
+    try:
+        return _import_tautulli_config(config, backup)
+    finally:
+        set_import_thread(None)
+        set_is_importing(False)
+
+
+def _import_tautulli_config(config, backup):
     if backup:
         # Make a backup of the current config first
         logger.info("Tautulli Config :: Creating a config backup before importing.")
@@ -253,7 +393,7 @@ def import_tautulli_config(config=None, backup=False):
     try:
         imported_config = Config(config, is_import=True)
     except:
-        logger.error("Tautulli Config :: Failed to import Tautulli config: error reading imported config file")
+        logger.exception("Tautulli Config :: Failed to import Tautulli config: error reading imported config file")
         return False
 
     logger.info("Tautulli Config :: Importing Tautulli config '%s'...", config)
@@ -262,7 +402,7 @@ def import_tautulli_config(config=None, backup=False):
     # Remove keys that should not be imported
     for key in _DO_NOT_IMPORT_KEYS:
         delattr(imported_config, key)
-    if plexpy.DOCKER or plexpy.SNAP:
+    if plexpy.DOCKER or plexpy.SNAP or plexpy.FLATPAK:
         for key in _DO_NOT_IMPORT_KEYS_DOCKER:
             delattr(imported_config, key)
 
@@ -271,8 +411,6 @@ def import_tautulli_config(config=None, backup=False):
     plexpy.CONFIG.write()
 
     logger.info("Tautulli Config :: Tautulli config import complete.")
-    set_import_thread(None)
-    set_is_importing(False)
 
     # Restart to apply changes
     plexpy.SIGNAL = 'restart'
@@ -282,9 +420,9 @@ def make_backup(cleanup=False, scheduler=False):
     """ Makes a backup of config file, removes all but the last 5 backups """
 
     if scheduler:
-        backup_file = 'config.backup-{}.sched.ini'.format(helpers.now())
+        backup_file = 'config.backup-{}.sched.ini.zip'.format(helpers.now())
     else:
-        backup_file = 'config.backup-{}.ini'.format(helpers.now())
+        backup_file = 'config.backup-{}.ini.zip'.format(helpers.now())
     backup_folder = plexpy.CONFIG.BACKUP_DIR
     backup_file_fp = os.path.join(backup_folder, backup_file)
 
@@ -293,22 +431,24 @@ def make_backup(cleanup=False, scheduler=False):
         os.makedirs(backup_folder)
 
     plexpy.CONFIG.write()
-    shutil.copyfile(plexpy.CONFIG_FILE, backup_file_fp)
+    with zipfile.ZipFile(backup_file_fp, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        zipf.write(plexpy.CONFIG_FILE, arcname=FILENAME)
 
     if cleanup:
         now = time.time()
         # Delete all scheduled backup older than BACKUP_DAYS.
         for root, dirs, files in os.walk(backup_folder):
-            ini_files = [os.path.join(root, f) for f in files if f.endswith('.sched.ini')]
+            ini_files = [os.path.join(root, f) for f in files if '.sched.ini' in f]
             for file_ in ini_files:
                 if os.stat(file_).st_mtime < now - plexpy.CONFIG.BACKUP_DAYS * 86400:
                     try:
                         os.remove(file_)
+                        logger.info("Tautulli Config :: Deleted old backup %s from the backup folder." % file_)
                     except OSError as e:
-                        logger.error("Tautulli Config :: Failed to delete %s from the backup folder: %s" % (file_, e))
+                        logger.warn("Tautulli Config :: Failed to delete %s from the backup folder: %s" % (file_, e))
 
     if backup_file in os.listdir(backup_folder):
-        logger.debug("Tautulli Config :: Successfully backed up %s to %s" % (plexpy.CONFIG_FILE, backup_file))
+        logger.info("Tautulli Config :: Successfully backed up %s to %s" % (plexpy.CONFIG_FILE, backup_file))
         return True
     else:
         logger.error("Tautulli Config :: Failed to backup %s to %s" % (plexpy.CONFIG_FILE, backup_file))
@@ -322,12 +462,25 @@ class Config(object):
 
     def __init__(self, config_file, is_import=False):
         """ Initialize the config with values from a file """
+        # Resolved settings cache: every CONFIG.X read previously re-ran
+        # an environment probe and a type cast; environment variables
+        # cannot change mid-process, so resolve once per key
+        self._settings_cache = {}
         self._config_file = config_file
+        self.no_password_upgrade = False
         try:
             self._config = ConfigObj(self._config_file, encoding='utf-8')
         except ParseError as e:
             logger.error("Tautulli Config :: Error reading configuration file: %s", e)
             raise
+
+        # write() writes each section whole and keeps the section order of the file.
+        # Every version since 2015 writes these four sections. A file without one was cut short.
+        self.damaged_copy = None
+        if not is_import and os.path.isfile(config_file) and \
+                not all(section in self._config for section in ('General', 'Advanced', 'PMS', 'Monitoring')):
+            self.damaged_copy = '%s.damaged-%s' % (config_file, helpers.now())
+            shutil.copy2(config_file, self.damaged_copy)
 
         for key in _CONFIG_DEFINITIONS:
             self.check_setting(key)
@@ -361,23 +514,65 @@ class Config(object):
         """ Check if INI section exists, if not create it """
         if section not in self._config:
             self._config[section] = {}
-            return True
-        else:
-            return False
 
-    def check_setting(self, key):
-        """ Cast any value in the config to the right type or use the default """
-        key, definition_type, section, ini_key, default = self._define(key)
+    def check_setting(self, name):
+        """ Check if INI key exists, if not create it """
+        key, definition_type, section, ini_key, default = self._define(name)
         self.check_section(section)
+        value = self._config[section].get(ini_key, default)
+        self._config[section][ini_key] = self._cast_setting(definition_type, value, default)
+    
+    def get_setting(self, name):
+        """ Get the value of a setting, either from the config file or environment variable """
+        key, definition_type, section, ini_key, default = self._define(name)
         try:
-            my_val = definition_type(self._config[section][ini_key])
+            value = self._settings_cache[key]
+        except KeyError:
+            # Check if the key is in the environment variables
+            value = self._from_env(key)
+            if not value:
+                # If not, check if the key is in the config file
+                value = self._config[section].get(ini_key, default)
+            value = self._cast_setting(definition_type, value, default)
+            self._settings_cache[key] = value
+        if definition_type in (list, dict):
+            # Hand out a copy so callers cannot mutate the cached value
+            # (matches the old cast-per-read behavior)
+            return definition_type(value)
+        return value
+    
+    def set_setting(self, name, value):
+        """ Set the value of a setting in the config file """
+        key, definition_type, section, ini_key, default = self._define(name)
+        # Check if the key is in the environment variables
+        env_value = self._from_env(key)
+        if env_value:
+            logger.warn("Tautulli Config :: '%s' set by environment variable. Setting not saved to config.", key)
+            return
+
+        # If not, set the value in the config file
+        self._config[section][ini_key] = self._cast_setting(definition_type, value, default)
+        self._settings_cache[key] = self._config[section][ini_key]
+        return self._config[section][ini_key]
+    
+    def _from_env(self, key):
+        """ Get key from environment variables, if it exists """
+        env_key = f"TAUTULLI_{key}"
+        return os.environ.get(env_key)
+    
+    def _cast_setting(self, definition_type, value, default=None):
+        """ Cast the value to the correct type, or use the default if it fails """
+        try:
+            return definition_type(value)
         except Exception:
-            my_val = definition_type(default)
-            self._config[section][ini_key] = my_val
-        return my_val
+            return definition_type(default)
 
     def write(self):
         """ Make a copy of the stored config and write it to the configured file """
+        # A config import merges directly into _config before writing;
+        # drop the resolved cache so re-reads pick up merged values
+        self._settings_cache.clear()
+
         new_config = ConfigObj(encoding="UTF-8")
         new_config.filename = self._config_file
 
@@ -400,10 +595,25 @@ class Config(object):
         # Write it to file
         logger.info("Tautulli Config :: Writing configuration to file")
 
-        try:
-            new_config.write()
-        except IOError as e:
-            logger.error("Tautulli Config :: Error writing configuration file: %s", e)
+        # Write a temp file and swap it in, so a crash never leaves a half written config
+        config_file = os.path.realpath(self._config_file)
+        temp_file = config_file + '.tmp'
+        with WRITE_LOCK:
+            try:
+                with open(temp_file, 'wb') as f:
+                    if os.path.exists(config_file):
+                        shutil.copymode(config_file, temp_file)
+                    new_config.write(f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_file, config_file)
+            except OSError as e:
+                # A locked or bind mounted file cannot be replaced, so write it in place
+                logger.debug("Tautulli Config :: Unable to replace configuration file, writing in place: %s", e)
+                try:
+                    new_config.write()
+                except IOError as e:
+                    logger.error("Tautulli Config :: Error writing configuration file: %s", e)
 
         self._blacklist()
 
@@ -412,10 +622,10 @@ class Config(object):
         Returns something from the ini unless it is a real property
         of the configuration object or is not all caps.
         """
-        if not re.match(r'[A-Z_]+$', name):
+        if not re.match(r'[A-Z0-9_]+$', name):
             return super(Config, self).__getattr__(name)
         else:
-            return self.check_setting(name)
+            return self.get_setting(name)
 
     def __setattr__(self, name, value):
         """
@@ -426,9 +636,7 @@ class Config(object):
             super(Config, self).__setattr__(name, value)
             return value
         else:
-            key, definition_type, section, ini_key, default = self._define(name)
-            self._config[section][ini_key] = definition_type(value)
-            return self._config[section][ini_key]
+            return self.set_setting(name, value)
 
     def __delattr__(self, name):
         """
@@ -438,19 +646,20 @@ class Config(object):
             return super(Config, self).__delattr__(name)
         else:
             key, definition_type, section, ini_key, default = self._define(name)
-            del self._config[section][ini_key]
+            self._settings_cache.pop(key, None)
+            if section in self._config:
+                self._config[section].pop(ini_key, None)
 
     def process_kwargs(self, kwargs):
         """
         Given a big bunch of key value pairs, apply them to the ini.
         """
         for name, value in kwargs.items():
-            key, definition_type, section, ini_key, default = self._define(name)
-            self._config[section][ini_key] = definition_type(value)
+            self.__setattr__(name.upper(), value)
 
     def _upgrade(self):
         """
-        Upgrades config file from previous verisions and bumps up config version
+        Upgrades config file from previous versions and bumps up config version
         """
         if self.CONFIG_VERSION == 0:
             self.CONFIG_VERSION = 1
@@ -481,14 +690,6 @@ class Config(object):
             self.CONFIG_VERSION = 4
 
         if self.CONFIG_VERSION == 4:
-            if not len(self.HOME_STATS_CARDS) and 'watch_stats' in self.HOME_SECTIONS:
-                home_sections = self.HOME_SECTIONS
-                home_sections.remove('watch_stats')
-                self.HOME_SECTIONS = home_sections
-            if not len(self.HOME_LIBRARY_CARDS) and 'library_stats' in self.HOME_SECTIONS:
-                home_sections = self.HOME_SECTIONS
-                home_sections.remove('library_stats')
-                self.HOME_SECTIONS = home_sections
 
             self.CONFIG_VERSION = 5
 
@@ -554,17 +755,48 @@ class Config(object):
 
         if self.CONFIG_VERSION == 17:
             home_stats_cards = self.HOME_STATS_CARDS
-            if 'top_users' in home_stats_cards:
-                top_users_index = home_stats_cards.index('top_users')
-                home_stats_cards.insert(top_users_index, 'top_libraries')
-            else:
-                home_stats_cards.append('top_libraries')
-            self.HOME_STATS_CARDS = home_stats_cards
+            if 'top_libraries' not in home_stats_cards:
+                if 'top_users' in home_stats_cards:
+                    top_users_index = home_stats_cards.index('top_users')
+                    home_stats_cards.insert(top_users_index, 'top_libraries')
+                else:
+                    home_stats_cards.append('top_libraries')
+                self.HOME_STATS_CARDS = home_stats_cards
 
             self.CONFIG_VERSION = 18
 
         if self.CONFIG_VERSION == 18:
-            self.CHECK_GITHUB_INTERVAL = (
-                    int(self.CHECK_GITHUB_INTERVAL // 60)
-                    + (self.CHECK_GITHUB_INTERVAL % 60 > 0)
-            )
+            if self.CHECK_GITHUB_INTERVAL > 24:
+                self.CHECK_GITHUB_INTERVAL = (
+                        int(self.CHECK_GITHUB_INTERVAL // 60)
+                        + (self.CHECK_GITHUB_INTERVAL % 60 > 0)
+                )
+
+            self.CONFIG_VERSION = 19
+
+        if self.CONFIG_VERSION == 19:
+            if self.HTTP_PASSWORD and not self.HTTP_HASHED_PASSWORD:
+                self.HTTP_PASSWORD = make_hash(self.HTTP_PASSWORD)
+            self.HTTP_HASH_PASSWORD = 1
+            self.HTTP_HASHED_PASSWORD = 1
+
+            self.CONFIG_VERSION = 20
+
+        if self.CONFIG_VERSION == 20:
+            if self.PMS_UUID:
+                self.FIRST_RUN_COMPLETE = 1
+
+            self.CONFIG_VERSION = 21
+
+        if self.CONFIG_VERSION == 21:
+            if not self.ANON_REDIRECT_DYNAMIC and not self.ANON_REDIRECT:
+                self.ANON_REDIRECT_DYNAMIC = 1
+
+            self.CONFIG_VERSION = 22
+
+        if self.CONFIG_VERSION == 22:
+            # generate_first_run_password() sets a password once for a finished install with none
+            self.no_password_upgrade = (self.FIRST_RUN_COMPLETE and not self.HTTP_PASSWORD
+                                        and not self.ALLOW_PUBLIC_NO_PASSWORD)
+
+            self.CONFIG_VERSION = 23

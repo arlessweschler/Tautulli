@@ -1,12 +1,9 @@
 # coding: utf-8
-
 """Basic tests for the CherryPy core: request handling."""
 
 import os
 import sys
 import types
-
-import six
 
 import cherrypy
 from cherrypy._cpcompat import ntou
@@ -50,14 +47,13 @@ class CoreRequestHandlingTest(helper.CPWebCase):
         root.expose_dec = ExposeExamples()
 
         class TestType(type):
-
             """Metaclass which automatically exposes all functions in each
             subclass, and adds an instance of the subclass as an attribute
             of root.
             """
             def __init__(cls, name, bases, dct):
                 type.__init__(cls, name, bases, dct)
-                for value in six.itervalues(dct):
+                for value in dct.values():
                     if isinstance(value, types.FunctionType):
                         value.exposed = True
                 setattr(root, name.lower(), cls())
@@ -387,6 +383,11 @@ class CoreRequestHandlingTest(helper.CPWebCase):
             r"<a href=(['\"])(.*)somewhere%20else\1>\2somewhere%20else</a>")
         self.assertStatus(307)
 
+        self.getPage('/redirect/by_code?code=308')
+        self.assertMatchesBody(
+            r"<a href=(['\"])(.*)somewhere%20else\1>\2somewhere%20else</a>")
+        self.assertStatus(308)
+
         self.getPage('/redirect/nomodify')
         self.assertBody('')
         self.assertStatus(304)
@@ -551,7 +552,7 @@ class CoreRequestHandlingTest(helper.CPWebCase):
             self.assertStatus(206)
             ct = self.assertHeader('Content-Type')
             expected_type = 'multipart/byteranges; boundary='
-            self.assert_(ct.startswith(expected_type))
+            assert ct.startswith(expected_type)
             boundary = ct[len(expected_type):]
             expected_body = ('\r\n--%s\r\n'
                              'Content-type: text/html\r\n'
@@ -583,9 +584,8 @@ class CoreRequestHandlingTest(helper.CPWebCase):
     def testFavicon(self):
         # favicon.ico is served by staticfile.
         icofilename = os.path.join(localDir, '../favicon.ico')
-        icofile = open(icofilename, 'rb')
-        data = icofile.read()
-        icofile.close()
+        with open(icofilename, 'rb') as icofile:
+            data = icofile.read()
 
         self.getPage('/favicon.ico')
         self.assertBody(data)

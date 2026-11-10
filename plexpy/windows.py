@@ -17,7 +17,8 @@
 
 import os
 import sys
-from systray import SysTrayIcon
+
+from infi.systray import SysTrayIcon
 
 try:
     from shlex import quote as cmd_quote
@@ -30,14 +31,9 @@ except ImportError:
     import _winreg as winreg
 
 import plexpy
-if plexpy.PYTHON2:
-    import common
-    import logger
-    import versioncheck
-else:
-    from plexpy import common
-    from plexpy import logger
-    from plexpy import versioncheck
+from plexpy import common
+from plexpy import logger
+from plexpy import versioncheck
 
 
 class WindowsSystemTray(object):
@@ -80,7 +76,7 @@ class WindowsSystemTray(object):
         try:
             self.tray_icon.start()
         except Exception as e:
-            logger.error("Unable to launch system tray icon: %s." % e)
+            logger.exception("Unable to launch system tray icon: %s." % e)
 
     def shutdown(self):
         self.tray_icon.shutdown()
@@ -148,13 +144,14 @@ def set_startup():
     startup_reg_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 
     exe = sys.executable
-    run_args = [arg for arg in plexpy.ARGS if arg != '--nolaunch']
+    args = plexpy.ARGS or []
+    run_args = [arg for arg in args if arg != '--nolaunch']
     if plexpy.FROZEN:
         args = [exe] + run_args
     else:
         args = [exe, plexpy.FULL_PATH] + run_args
 
-    registry_key_name = '{}_{}'.format(common.PRODUCT, plexpy.CONFIG.PMS_UUID)
+    registry_key_name = common.PRODUCT
 
     cmd = ' '.join(cmd_quote(arg) for arg in args).replace('python.exe', 'pythonw.exe').replace("'", '"')
 
@@ -162,14 +159,14 @@ def set_startup():
         # Rename old Tautulli registry key
         try:
             registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, startup_reg_path, 0, winreg.KEY_ALL_ACCESS)
-            winreg.QueryValueEx(registry_key, common.PRODUCT)
+            winreg.QueryValueEx(registry_key, '{}_{}'.format(common.PRODUCT, plexpy.CONFIG.PMS_UUID))
             reg_value_exists = True
         except WindowsError:
             reg_value_exists = False
 
         if reg_value_exists:
             try:
-                winreg.DeleteValue(registry_key, common.PRODUCT)
+                winreg.DeleteValue(registry_key, '{}_{}'.format(common.PRODUCT, plexpy.CONFIG.PMS_UUID))
                 winreg.CloseKey(registry_key)
             except WindowsError:
                 pass

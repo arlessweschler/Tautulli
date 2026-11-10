@@ -1,21 +1,20 @@
-# -*- coding: utf-8 -*-
+import os
 from urllib.parse import urlencode
-from xml.etree import ElementTree
 
 import requests
-from plexapi import (BASE_HEADERS, CONFIG, TIMEOUT, X_PLEX_CONTAINER_SIZE, log,
-                     logfilter)
+
+from plexapi import BASE_HEADERS, CONFIG, TIMEOUT, log, logfilter
 from plexapi import utils
 from plexapi.alert import AlertListener
-from plexapi.base import PlexObject
+from plexapi.base import PlexObject, cached_data_property
 from plexapi.client import PlexClient
+from plexapi.collection import Collection
 from plexapi.exceptions import BadRequest, NotFound, Unauthorized
 from plexapi.library import Hub, Library, Path, File
 from plexapi.media import Conversion, Optimized
 from plexapi.playlist import Playlist
 from plexapi.playqueue import PlayQueue
 from plexapi.settings import Settings
-from plexapi.utils import cast, deprecated
 from requests.status_codes import _codes as codes
 
 # Need these imports to populate utils.PLEXOBJECTS
@@ -38,8 +37,9 @@ class PlexServer(PlexObject):
             baseurl (str): Base url for to access the Plex Media Server (default: 'http://localhost:32400').
             token (str): Required Plex authentication token to access the server.
             session (requests.Session, optional): Use your own session object if you want to
-                cache the http responses from PMS
-            timeout (int): timeout in seconds on initial connect to server (default config.TIMEOUT).
+                cache the http responses from the server.
+            timeout (int, optional): Timeout in seconds on initial connection to the server
+                (default config.TIMEOUT).
 
         Attributes:
             allowCameraUpload (bool): True if server allows camera upload.
@@ -105,58 +105,53 @@ class PlexServer(PlexObject):
         self._token = logfilter.add_secret(token or CONFIG.get('auth.server_token'))
         self._showSecrets = CONFIG.get('log.show_secrets', '').lower() == 'true'
         self._session = session or requests.Session()
-        self._library = None   # cached library
-        self._settings = None   # cached settings
-        self._myPlexAccount = None   # cached myPlexAccount
-        self._systemAccounts = None   # cached list of SystemAccount
-        self._systemDevices = None   # cached list of SystemDevice
-        data = self.query(self.key, timeout=timeout)
+        self._timeout = timeout or TIMEOUT
+        data = self.query(self.key, timeout=self._timeout)
         super(PlexServer, self).__init__(self, data, self.key)
 
     def _loadData(self, data):
         """ Load attribute values from Plex XML response. """
-        self._data = data
-        self.allowCameraUpload = cast(bool, data.attrib.get('allowCameraUpload'))
-        self.allowChannelAccess = cast(bool, data.attrib.get('allowChannelAccess'))
-        self.allowMediaDeletion = cast(bool, data.attrib.get('allowMediaDeletion'))
-        self.allowSharing = cast(bool, data.attrib.get('allowSharing'))
-        self.allowSync = cast(bool, data.attrib.get('allowSync'))
-        self.backgroundProcessing = cast(bool, data.attrib.get('backgroundProcessing'))
-        self.certificate = cast(bool, data.attrib.get('certificate'))
-        self.companionProxy = cast(bool, data.attrib.get('companionProxy'))
+        self.allowCameraUpload = utils.cast(bool, data.attrib.get('allowCameraUpload'))
+        self.allowChannelAccess = utils.cast(bool, data.attrib.get('allowChannelAccess'))
+        self.allowMediaDeletion = utils.cast(bool, data.attrib.get('allowMediaDeletion'))
+        self.allowSharing = utils.cast(bool, data.attrib.get('allowSharing'))
+        self.allowSync = utils.cast(bool, data.attrib.get('allowSync'))
+        self.backgroundProcessing = utils.cast(bool, data.attrib.get('backgroundProcessing'))
+        self.certificate = utils.cast(bool, data.attrib.get('certificate'))
+        self.companionProxy = utils.cast(bool, data.attrib.get('companionProxy'))
         self.diagnostics = utils.toList(data.attrib.get('diagnostics'))
-        self.eventStream = cast(bool, data.attrib.get('eventStream'))
+        self.eventStream = utils.cast(bool, data.attrib.get('eventStream'))
         self.friendlyName = data.attrib.get('friendlyName')
-        self.hubSearch = cast(bool, data.attrib.get('hubSearch'))
+        self.hubSearch = utils.cast(bool, data.attrib.get('hubSearch'))
         self.machineIdentifier = data.attrib.get('machineIdentifier')
-        self.multiuser = cast(bool, data.attrib.get('multiuser'))
-        self.myPlex = cast(bool, data.attrib.get('myPlex'))
+        self.multiuser = utils.cast(bool, data.attrib.get('multiuser'))
+        self.myPlex = utils.cast(bool, data.attrib.get('myPlex'))
         self.myPlexMappingState = data.attrib.get('myPlexMappingState')
         self.myPlexSigninState = data.attrib.get('myPlexSigninState')
-        self.myPlexSubscription = cast(bool, data.attrib.get('myPlexSubscription'))
+        self.myPlexSubscription = utils.cast(bool, data.attrib.get('myPlexSubscription'))
         self.myPlexUsername = data.attrib.get('myPlexUsername')
         self.ownerFeatures = utils.toList(data.attrib.get('ownerFeatures'))
-        self.photoAutoTag = cast(bool, data.attrib.get('photoAutoTag'))
+        self.photoAutoTag = utils.cast(bool, data.attrib.get('photoAutoTag'))
         self.platform = data.attrib.get('platform')
         self.platformVersion = data.attrib.get('platformVersion')
-        self.pluginHost = cast(bool, data.attrib.get('pluginHost'))
-        self.readOnlyLibraries = cast(int, data.attrib.get('readOnlyLibraries'))
-        self.requestParametersInCookie = cast(bool, data.attrib.get('requestParametersInCookie'))
+        self.pluginHost = utils.cast(bool, data.attrib.get('pluginHost'))
+        self.readOnlyLibraries = utils.cast(int, data.attrib.get('readOnlyLibraries'))
+        self.requestParametersInCookie = utils.cast(bool, data.attrib.get('requestParametersInCookie'))
         self.streamingBrainVersion = data.attrib.get('streamingBrainVersion')
-        self.sync = cast(bool, data.attrib.get('sync'))
+        self.sync = utils.cast(bool, data.attrib.get('sync'))
         self.transcoderActiveVideoSessions = int(data.attrib.get('transcoderActiveVideoSessions', 0))
-        self.transcoderAudio = cast(bool, data.attrib.get('transcoderAudio'))
-        self.transcoderLyrics = cast(bool, data.attrib.get('transcoderLyrics'))
-        self.transcoderPhoto = cast(bool, data.attrib.get('transcoderPhoto'))
-        self.transcoderSubtitles = cast(bool, data.attrib.get('transcoderSubtitles'))
-        self.transcoderVideo = cast(bool, data.attrib.get('transcoderVideo'))
+        self.transcoderAudio = utils.cast(bool, data.attrib.get('transcoderAudio'))
+        self.transcoderLyrics = utils.cast(bool, data.attrib.get('transcoderLyrics'))
+        self.transcoderPhoto = utils.cast(bool, data.attrib.get('transcoderPhoto'))
+        self.transcoderSubtitles = utils.cast(bool, data.attrib.get('transcoderSubtitles'))
+        self.transcoderVideo = utils.cast(bool, data.attrib.get('transcoderVideo'))
         self.transcoderVideoBitrates = utils.toList(data.attrib.get('transcoderVideoBitrates'))
         self.transcoderVideoQualities = utils.toList(data.attrib.get('transcoderVideoQualities'))
         self.transcoderVideoResolutions = utils.toList(data.attrib.get('transcoderVideoResolutions'))
         self.updatedAt = utils.toDatetime(data.attrib.get('updatedAt'))
-        self.updater = cast(bool, data.attrib.get('updater'))
+        self.updater = utils.cast(bool, data.attrib.get('updater'))
         self.version = data.attrib.get('version')
-        self.voiceSearch = cast(bool, data.attrib.get('voiceSearch'))
+        self.voiceSearch = utils.cast(bool, data.attrib.get('voiceSearch'))
 
     def _headers(self, **kwargs):
         """ Returns dict containing base headers for all requests to the server. """
@@ -166,31 +161,54 @@ class PlexServer(PlexObject):
         headers.update(kwargs)
         return headers
 
-    @property
+    def _uriRoot(self):
+        return f'server://{self.machineIdentifier}/com.plexapp.plugins.library'
+
+    @cached_data_property
     def library(self):
         """ Library to browse or search your media. """
-        if not self._library:
-            try:
-                data = self.query(Library.key)
-                self._library = Library(self, data)
-            except BadRequest:
-                data = self.query('/library/sections/')
-                # Only the owner has access to /library
-                # so just return the library without the data.
-                return Library(self, data)
-        return self._library
+        try:
+            data = self.query(Library.key)
+        except BadRequest:
+            # Only the owner has access to /library
+            # so just return the library without the data.
+            data = self.query('/library/sections/')
+        return Library(self, data)
 
-    @property
+    @cached_data_property
     def settings(self):
         """ Returns a list of all server settings. """
-        if not self._settings:
-            data = self.query(Settings.key)
-            self._settings = Settings(self, data)
-        return self._settings
+        data = self.query(Settings.key)
+        return Settings(self, data)
+
+    def identity(self):
+        """ Returns the Plex server identity. """
+        data = self.query('/identity')
+        return Identity(self, data)
 
     def account(self):
         """ Returns the :class:`~plexapi.server.Account` object this server belongs to. """
         data = self.query(Account.key)
+        return Account(self, data)
+
+    def claim(self, account):
+        """ Claim the Plex server using a :class:`~plexapi.myplex.MyPlexAccount`.
+            This will only work with an unclaimed server on localhost or the same subnet.
+
+            Parameters:
+                account (:class:`~plexapi.myplex.MyPlexAccount`): The account used to
+                    claim the server.
+        """
+        key = '/myplex/claim'
+        params = {'token': account.claimToken()}
+        data = self.query(key, method=self._session.post, params=params)
+        return Account(self, data)
+
+    def unclaim(self):
+        """ Unclaim the Plex server. This will remove the server from your
+            :class:`~plexapi.myplex.MyPlexAccount`.
+        """
+        data = self.query(Account.key, method=self._session.delete)
         return Account(self, data)
 
     @property
@@ -202,25 +220,62 @@ class PlexServer(PlexObject):
         return activities
 
     def agents(self, mediaType=None):
-        """ Returns the :class:`~plexapi.media.Agent` objects this server has available. """
+        """ Returns a list of :class:`~plexapi.media.Agent` objects this server has available. """
         key = '/system/agents'
         if mediaType:
-            key += '?mediaType=%s' % mediaType
+            key += f'?mediaType={utils.searchType(mediaType)}'
         return self.fetchItems(key)
 
     def createToken(self, type='delegation', scope='all'):
-        """Create a temp access token for the server."""
+        """ Create a temp access token for the server. """
         if not self._token:
             # Handle unclaimed servers
             return None
-        q = self.query('/security/token?type=%s&scope=%s' % (type, scope))
+        q = self.query(f'/security/token?type={type}&scope={scope}')
         return q.attrib.get('token')
+
+    def switchUser(self, user, session=None, timeout=None):
+        """ Returns a new :class:`~plexapi.server.PlexServer` object logged in as the given username.
+            Note: Only the admin account can switch to other users.
+
+            Parameters:
+                user (:class:`~plexapi.myplex.MyPlexUser` or str): `MyPlexUser` object, username,
+                    email, or user id of the user to log in to the server.
+                session (requests.Session, optional): Use your own session object if you want to
+                    cache the http responses from the server. This will default to the same
+                    session as the admin account if no new session is provided.
+                timeout (int, optional): Timeout in seconds on initial connection to the server.
+                    This will default to the same timeout as the admin account if no new timeout
+                    is provided.
+
+            Example:
+
+                .. code-block:: python
+
+                    from plexapi.server import PlexServer
+                    # Login to the Plex server using the admin token
+                    plex = PlexServer('http://plexserver:32400', token='2ffLuB84dqLswk9skLos')
+                    # Login to the same Plex server using a different account
+                    userPlex = plex.switchUser("Username")
+
+        """
+        from plexapi.myplex import MyPlexUser
+        user = user if isinstance(user, MyPlexUser) else self.myPlexAccount().user(user)
+        userToken = user.get_token(self.machineIdentifier)
+        if session is None:
+            session = self._session
+        if timeout is None:
+            timeout = self._timeout
+        return PlexServer(self._baseurl, token=userToken, session=session, timeout=timeout)
+
+    @cached_data_property
+    def _systemAccounts(self):
+        """ Cache for systemAccounts. """
+        key = '/accounts'
+        return self.fetchItems(key, SystemAccount)
 
     def systemAccounts(self):
         """ Returns a list of :class:`~plexapi.server.SystemAccount` objects this server contains. """
-        if self._systemAccounts is None:
-            key = '/accounts'
-            self._systemAccounts = self.fetchItems(key, SystemAccount)
         return self._systemAccounts
 
     def systemAccount(self, accountID):
@@ -232,13 +287,16 @@ class PlexServer(PlexObject):
         try:
             return next(account for account in self.systemAccounts() if account.id == accountID)
         except StopIteration:
-            raise NotFound('Unknown account with accountID=%s' % accountID) from None
+            raise NotFound(f'Unknown account with accountID={accountID}') from None
+
+    @cached_data_property
+    def _systemDevices(self):
+        """ Cache for systemDevices. """
+        key = '/devices'
+        return self.fetchItems(key, SystemDevice)
 
     def systemDevices(self):
         """ Returns a list of :class:`~plexapi.server.SystemDevice` objects this server contains. """
-        if self._systemDevices is None:
-            key = '/devices'
-            self._systemDevices = self.fetchItems(key, SystemDevice)
         return self._systemDevices
 
     def systemDevice(self, deviceID):
@@ -250,23 +308,26 @@ class PlexServer(PlexObject):
         try:
             return next(device for device in self.systemDevices() if device.id == deviceID)
         except StopIteration:
-            raise NotFound('Unknown device with deviceID=%s' % deviceID) from None
+            raise NotFound(f'Unknown device with deviceID={deviceID}') from None
+
+    @cached_data_property
+    def _myPlexAccount(self):
+        """ Cache for myPlexAccount. """
+        from plexapi.myplex import MyPlexAccount
+        return MyPlexAccount(token=self._token, session=self._session)
 
     def myPlexAccount(self):
         """ Returns a :class:`~plexapi.myplex.MyPlexAccount` object using the same
             token to access this server. If you are not the owner of this PlexServer
-            you're likley to recieve an authentication error calling this.
+            you're likely to receive an authentication error calling this.
         """
-        if self._myPlexAccount is None:
-            from plexapi.myplex import MyPlexAccount
-            self._myPlexAccount = MyPlexAccount(token=self._token)
         return self._myPlexAccount
 
     def _myPlexClientPorts(self):
         """ Sometimes the PlexServer does not properly advertise port numbers required
-            to connect. This attemps to look up device port number from plex.tv.
+            to connect. This attempts to look up device port number from plex.tv.
             See issue #126: Make PlexServer.clients() more user friendly.
-              https://github.com/pkkid/python-plexapi/issues/126
+              https://github.com/pushingkarmaorg/python-plexapi/issues/126
         """
         try:
             ports = {}
@@ -292,11 +353,10 @@ class PlexServer(PlexObject):
             key = path.key
         elif path is not None:
             base64path = utils.base64str(path)
-            key = '/services/browse/%s' % base64path
+            key = f'/services/browse/{base64path}'
         else:
             key = '/services/browse'
-        if includeFiles:
-            key += '?includeFiles=1'
+        key += f'?includeFiles={int(includeFiles)}'  # starting with PMS v1.32.7.7621 this must set explicitly
         return self.fetchItems(key)
 
     def walk(self, path=None):
@@ -326,6 +386,17 @@ class PlexServer(PlexObject):
             for path, paths, files in self.walk(_path):
                 yield path, paths, files
 
+    def isBrowsable(self, path):
+        """ Returns True if the Plex server can browse the given path.
+
+            Parameters:
+                path (:class:`~plexapi.library.Path` or str): Full path to browse.
+        """
+        if isinstance(path, Path):
+            path = path.path
+        paths = [p.path for p in self.browse(os.path.dirname(path), includeFiles=False)]
+        return path in paths
+
     def clients(self):
         """ Returns list of all :class:`~plexapi.client.PlexClient` objects connected to server. """
         items = []
@@ -336,35 +407,149 @@ class PlexServer(PlexObject):
                 log.warning('%s did not advertise a port, checking plex.tv.', elem.attrib.get('name'))
                 ports = self._myPlexClientPorts() if ports is None else ports
                 port = ports.get(elem.attrib.get('machineIdentifier'))
-            baseurl = 'http://%s:%s' % (elem.attrib['host'], port)
+            baseurl = f"http://{elem.attrib['host']}:{port}"
             items.append(PlexClient(baseurl=baseurl, server=self,
                                     token=self._token, data=elem, connect=False))
 
         return items
 
     def client(self, name):
-        """ Returns the :class:`~plexapi.client.PlexClient` that matches the specified name.
+        """ Returns the :class:`~plexapi.client.PlexClient` that matches the specified name
+            or machine identifier.
 
             Parameters:
-                name (str): Name of the client to return.
+                name (str): Name or machine identifier of the client to return.
 
             Raises:
                 :exc:`~plexapi.exceptions.NotFound`: Unknown client name.
         """
         for client in self.clients():
-            if client and client.title == name:
+            if client and (client.title == name or client.machineIdentifier == name):
                 return client
 
-        raise NotFound('Unknown client name: %s' % name)
+        raise NotFound(f'Unknown client name: {name}')
 
-    def createPlaylist(self, title, items=None, section=None, limit=None, smart=None, **kwargs):
+    def createCollection(self, title, section, items=None, smart=False, limit=None,
+                         libtype=None, sort=None, filters=None, **kwargs):
+        """ Creates and returns a new :class:`~plexapi.collection.Collection`.
+
+            Parameters:
+                title (str): Title of the collection.
+                section (:class:`~plexapi.library.LibrarySection`, str): The library section to create the collection in.
+                items (List): Regular collections only, list of :class:`~plexapi.audio.Audio`,
+                    :class:`~plexapi.video.Video`, or :class:`~plexapi.photo.Photo` objects to be added to the collection.
+                smart (bool): True to create a smart collection. Default False.
+                limit (int): Smart collections only, limit the number of items in the collection.
+                libtype (str): Smart collections only, the specific type of content to filter
+                    (movie, show, season, episode, artist, album, track, photoalbum, photo).
+                sort (str or list, optional): Smart collections only, a string of comma separated sort fields
+                    or a list of sort fields in the format ``column:dir``.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                filters (dict): Smart collections only, a dictionary of advanced filters.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                **kwargs (dict): Smart collections only, additional custom filters to apply to the
+                    search results. See :func:`~plexapi.library.LibrarySection.search` for more info.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When no items are included to create the collection.
+                :class:`plexapi.exceptions.BadRequest`: When mixing media types in the collection.
+
+            Returns:
+                :class:`~plexapi.collection.Collection`: A new instance of the created Collection.
+
+            Example:
+
+                .. code-block:: python
+
+                    # Create a regular collection
+                    movies = plex.library.section("Movies")
+                    movie1 = movies.get("Big Buck Bunny")
+                    movie2 = movies.get("Sita Sings the Blues")
+                    collection = plex.createCollection(
+                        title="Favorite Movies",
+                        section=movies,
+                        items=[movie1, movie2]
+                    )
+
+                    # Create a smart collection
+                    collection = plex.createCollection(
+                        title="Recently Aired Comedy TV Shows",
+                        section="TV Shows",
+                        smart=True,
+                        sort="episode.originallyAvailableAt:desc",
+                        filters={"episode.originallyAvailableAt>>": "4w", "genre": "comedy"}
+                    )
+
+        """
+        return Collection.create(
+            self, title, section, items=items, smart=smart, limit=limit,
+            libtype=libtype, sort=sort, filters=filters, **kwargs)
+
+    def createPlaylist(self, title, section=None, items=None, smart=False, limit=None,
+                       libtype=None, sort=None, filters=None, m3ufilepath=None, **kwargs):
         """ Creates and returns a new :class:`~plexapi.playlist.Playlist`.
 
             Parameters:
-                title (str): Title of the playlist to be created.
-                items (list<Media>): List of media items to include in the playlist.
+                title (str): Title of the playlist.
+                section (:class:`~plexapi.library.LibrarySection`, str): Smart playlists and m3u import only,
+                    the library section to create the playlist in.
+                items (List): Regular playlists only, list of :class:`~plexapi.audio.Audio`,
+                    :class:`~plexapi.video.Video`, or :class:`~plexapi.photo.Photo` objects to be added to the playlist.
+                smart (bool): True to create a smart playlist. Default False.
+                limit (int): Smart playlists only, limit the number of items in the playlist.
+                libtype (str): Smart playlists only, the specific type of content to filter
+                    (movie, show, season, episode, artist, album, track, photoalbum, photo).
+                sort (str or list, optional): Smart playlists only, a string of comma separated sort fields
+                    or a list of sort fields in the format ``column:dir``.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                filters (dict): Smart playlists only, a dictionary of advanced filters.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                m3ufilepath (str): Music playlists only, the full file path to an m3u file to import.
+                    Note: This will overwrite any playlist previously created from the same m3u file.
+                **kwargs (dict): Smart playlists only, additional custom filters to apply to the
+                    search results. See :func:`~plexapi.library.LibrarySection.search` for more info.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When no items are included to create the playlist.
+                :class:`plexapi.exceptions.BadRequest`: When mixing media types in the playlist.
+                :class:`plexapi.exceptions.BadRequest`: When attempting to import m3u file into non-music library.
+                :class:`plexapi.exceptions.BadRequest`: When failed to import m3u file.
+
+            Returns:
+                :class:`~plexapi.playlist.Playlist`: A new instance of the created Playlist.
+
+            Example:
+
+                .. code-block:: python
+
+                    # Create a regular playlist
+                    episodes = plex.library.section("TV Shows").get("Game of Thrones").episodes()
+                    playlist = plex.createPlaylist(
+                        title="GoT Episodes",
+                        items=episodes
+                    )
+
+                    # Create a smart playlist
+                    playlist = plex.createPlaylist(
+                        title="Top 10 Unwatched Movies",
+                        section="Movies",
+                        smart=True,
+                        limit=10,
+                        sort="audienceRating:desc",
+                        filters={"audienceRating>>": 8.0, "unwatched": True}
+                    )
+
+                    # Create a music playlist from an m3u file
+                    playlist = plex.createPlaylist(
+                        title="Favorite Tracks",
+                        section="Music",
+                        m3ufilepath="/path/to/playlist.m3u"
+                    )
+
         """
-        return Playlist.create(self, title, items=items, limit=limit, section=section, smart=smart, **kwargs)
+        return Playlist.create(
+            self, title, section=section, items=items, smart=smart, limit=limit,
+            libtype=libtype, sort=sort, filters=filters, m3ufilepath=m3ufilepath, **kwargs)
 
     def createPlayQueue(self, item, **kwargs):
         """ Creates and returns a new :class:`~plexapi.playqueue.PlayQueue`.
@@ -375,40 +560,66 @@ class PlexServer(PlexObject):
         """
         return PlayQueue.create(self, item, **kwargs)
 
-    def downloadDatabases(self, savepath=None, unpack=False):
+    def downloadDatabases(self, savepath=None, unpack=False, showstatus=False):
         """ Download databases.
 
             Parameters:
                 savepath (str): Defaults to current working dir.
                 unpack (bool): Unpack the zip file.
+                showstatus(bool): Display a progressbar.
         """
         url = self.url('/diagnostics/databases')
-        filepath = utils.download(url, self._token, None, savepath, self._session, unpack=unpack)
+        filepath = utils.download(url, self._token, None, savepath, self._session, unpack=unpack, showstatus=showstatus)
         return filepath
 
-    def downloadLogs(self, savepath=None, unpack=False):
+    def downloadLogs(self, savepath=None, unpack=False, showstatus=False):
         """ Download server logs.
 
             Parameters:
                 savepath (str): Defaults to current working dir.
                 unpack (bool): Unpack the zip file.
+                showstatus(bool): Display a progressbar.
         """
         url = self.url('/diagnostics/logs')
-        filepath = utils.download(url, self._token, None, savepath, self._session, unpack=unpack)
+        filepath = utils.download(url, self._token, None, savepath, self._session, unpack=unpack, showstatus=showstatus)
         return filepath
 
-    @deprecated('use "checkForUpdate" instead')
-    def check_for_update(self, force=True, download=False):
-        return self.checkForUpdate()
+    def butlerTasks(self):
+        """ Return a list of :class:`~plexapi.base.ButlerTask` objects. """
+        return self.fetchItems('/butler')
+
+    def runButlerTask(self, task):
+        """ Manually run a butler task immediately instead of waiting for the scheduled task to run.
+            Note: The butler task is run asynchronously. Check Plex Web to monitor activity.
+
+            Parameters:
+                task (str): The name of the task to run. (e.g. 'BackupDatabase')
+
+            Example:
+
+                .. code-block:: python
+
+                    availableTasks = [task.name for task in plex.butlerTasks()]
+                    print("Available butler tasks:", availableTasks)
+
+        """
+        validTasks = [_task.name for _task in self.butlerTasks()]
+        if task not in validTasks:
+            raise BadRequest(
+                f'Invalid butler task: {task}. Available tasks are: {validTasks}'
+            )
+        self.query(f'/butler/{task}', method=self._session.post)
+        return self
 
     def checkForUpdate(self, force=True, download=False):
-        """ Returns a :class:`~plexapi.base.Release` object containing release info.
+        """ Returns a :class:`~plexapi.server.Release` object containing release info
+            if an update is available or None if no update is available.
 
-           Parameters:
+            Parameters:
                 force (bool): Force server to check for new releases
                 download (bool): Download if a update is available.
         """
-        part = '/updater/check?download=%s' % (1 if download else 0)
+        part = f'/updater/check?download={1 if download else 0}'
         if force:
             self.query(part, method=self._session.put)
         releases = self.fetchItems('/updater/status')
@@ -416,12 +627,19 @@ class PlexServer(PlexObject):
             return releases[0]
 
     def isLatest(self):
-        """ Check if the installed version of PMS is the latest. """
+        """ Returns True if the installed version of Plex Media Server is the latest. """
         release = self.checkForUpdate(force=True)
         return release is None
 
+    def canInstallUpdate(self):
+        """ Returns True if the newest version of Plex Media Server can be installed automatically.
+            (e.g. Windows and Mac can install updates automatically, but Docker and NAS devices cannot.)
+        """
+        release = self.query('/updater/status')
+        return utils.cast(bool, release.get('canInstall'))
+
     def installUpdate(self):
-        """ Install the newest version of Plex Media Server. """
+        """ Automatically install the newest version of Plex Media Server. """
         # We can add this but dunno how useful this is since it sometimes
         # requires user action using a gui.
         part = '/updater/apply'
@@ -430,7 +648,7 @@ class PlexServer(PlexObject):
             # figure out what method this is..
             return self.query(part, method=self._session.put)
 
-    def history(self, maxresults=9999999, mindate=None, ratingKey=None, accountID=None, librarySectionID=None):
+    def history(self, maxresults=None, mindate=None, ratingKey=None, accountID=None, librarySectionID=None):
         """ Returns a list of media items from watched history. If there are many results, they will
             be fetched from the server in batches of X_PLEX_CONTAINER_SIZE amounts. If you're only
             looking for the first <num> results, it would be wise to set the maxresults option to that
@@ -444,7 +662,6 @@ class PlexServer(PlexObject):
                 accountID (int/str) Request history for a specific account ID.
                 librarySectionID (int/str) Request history for a specific library section ID.
         """
-        results, subresults = [], '_init'
         args = {'sort': 'viewedAt:desc'}
         if ratingKey:
             args['metadataItemID'] = ratingKey
@@ -454,20 +671,33 @@ class PlexServer(PlexObject):
             args['librarySectionID'] = librarySectionID
         if mindate:
             args['viewedAt>'] = int(mindate.timestamp())
-        args['X-Plex-Container-Start'] = 0
-        args['X-Plex-Container-Size'] = min(X_PLEX_CONTAINER_SIZE, maxresults)
-        while subresults and maxresults > len(results):
-            key = '/status/sessions/history/all%s' % utils.joinArgs(args)
-            subresults = self.fetchItems(key)
-            results += subresults[:maxresults - len(results)]
-            args['X-Plex-Container-Start'] += args['X-Plex-Container-Size']
-        return results
 
-    def playlists(self):
-        """ Returns a list of all :class:`~plexapi.playlist.Playlist` objects saved on the server. """
-        # TODO: Add sort and type options?
-        # /playlists/all?type=15&sort=titleSort%3Aasc&playlistType=video&smart=0
-        return self.fetchItems('/playlists')
+        key = f'/status/sessions/history/all{utils.joinArgs(args)}'
+        return self.fetchItems(key, maxresults=maxresults)
+
+    def playlists(self, playlistType=None, sectionId=None, title=None, sort=None, **kwargs):
+        """ Returns a list of all :class:`~plexapi.playlist.Playlist` objects on the server.
+
+            Parameters:
+                playlistType (str, optional): The type of playlists to return (audio, video, photo).
+                    Default returns all playlists.
+                sectionId (int, optional): The section ID (key) of the library to search within.
+                title (str, optional): General string query to search for. Partial string matches are allowed.
+                sort (str or list, optional): A string of comma separated sort fields in the format ``column:dir``.
+        """
+        args = {}
+        if playlistType is not None:
+            args['playlistType'] = playlistType
+        if sectionId is not None:
+            args['sectionID'] = sectionId
+        if title is not None:
+            args['title'] = title
+        if sort is not None:
+            # TODO: Automatically retrieve and validate sort field similar to LibrarySection.search()
+            args['sort'] = sort
+
+        key = f'/playlists{utils.joinArgs(args)}'
+        return self.fetchItems(key, **kwargs)
 
     def playlist(self, title):
         """ Returns the :class:`~plexapi.client.Playlist` that matches the specified title.
@@ -476,9 +706,12 @@ class PlexServer(PlexObject):
                 title (str): Title of the playlist to return.
 
             Raises:
-                :exc:`~plexapi.exceptions.NotFound`: Invalid playlist title.
+                :exc:`~plexapi.exceptions.NotFound`: Unable to find playlist.
         """
-        return self.fetchItem('/playlists', title=title)
+        try:
+            return self.playlists(title=title, title__iexact=title)[0]
+        except IndexError:
+            raise NotFound(f'Unable to find playlist with title "{title}".') from None
 
     def optimizedItems(self, removeAll=None):
         """ Returns list of all :class:`~plexapi.media.Optimized` objects connected to server. """
@@ -487,15 +720,7 @@ class PlexServer(PlexObject):
             self.query(key, method=self._server._session.delete)
         else:
             backgroundProcessing = self.fetchItem('/playlists?type=42')
-            return self.fetchItems('%s/items' % backgroundProcessing.key, cls=Optimized)
-
-    def optimizedItem(self, optimizedID):
-        """ Returns single queued optimized item :class:`~plexapi.media.Video` object.
-            Allows for using optimized item ID to connect back to source item.
-        """
-
-        backgroundProcessing = self.fetchItem('/playlists?type=42')
-        return self.fetchItem('%s/items/%s/items' % (backgroundProcessing.key, optimizedID))
+            return self.fetchItems(f'{backgroundProcessing.key}/items', cls=Optimized)
 
     def conversions(self, pause=None):
         """ Returns list of all :class:`~plexapi.media.Conversion` objects connected to server. """
@@ -510,29 +735,28 @@ class PlexServer(PlexObject):
         """ Returns list of all :class:`~plexapi.media.TranscodeJob` objects running or paused on server. """
         return self.fetchItems('/status/sessions/background')
 
-    def query(self, key, method=None, headers=None, timeout=None, **kwargs):
+    def query(self, key, method=None, headers=None, params=None, timeout=None, **kwargs):
         """ Main method used to handle HTTPS requests to the Plex server. This method helps
             by encoding the response to utf-8 and parsing the returned XML into and
             ElementTree object. Returns None if no data exists in the response.
         """
         url = self.url(key)
         method = method or self._session.get
-        timeout = timeout or TIMEOUT
+        timeout = timeout or self._timeout
         log.debug('%s %s', method.__name__.upper(), url)
         headers = self._headers(**headers or {})
-        response = method(url, headers=headers, timeout=timeout, **kwargs)
+        response = method(url, headers=headers, params=params, timeout=timeout, **kwargs)
         if response.status_code not in (200, 201, 204):
             codename = codes.get(response.status_code)[0]
             errtext = response.text.replace('\n', ' ')
-            message = '(%s) %s; %s %s' % (response.status_code, codename, response.url, errtext)
+            message = f'({response.status_code}) {codename}; {response.url} {errtext}'
             if response.status_code == 401:
                 raise Unauthorized(message)
             elif response.status_code == 404:
                 raise NotFound(message)
             else:
                 raise BadRequest(message)
-        data = response.text.encode('utf8')
-        return ElementTree.fromstring(data) if data.strip() else None
+        return utils.parseXMLString(response.text)
 
     def search(self, query, mediatype=None, limit=None, sectionId=None):
         """ Returns a list of media items or filter categories from the resulting
@@ -563,14 +787,18 @@ class PlexServer(PlexObject):
             params['limit'] = limit
         if sectionId:
             params['sectionId'] = sectionId
-        key = '/hubs/search?%s' % urlencode(params)
+        key = f'/hubs/search?{urlencode(params)}'
         for hub in self.fetchItems(key, Hub):
             if mediatype:
                 if hub.type == mediatype:
-                    return hub.items
+                    return hub._partialItems
             else:
-                results += hub.items
+                results += hub._partialItems
         return results
+
+    def continueWatching(self):
+        """ Return a list of all items in the Continue Watching hub. """
+        return self.fetchItems('/hubs/continueWatching/items')
 
     def sessions(self):
         """ Returns a list of all active session (currently playing) media objects. """
@@ -580,39 +808,73 @@ class PlexServer(PlexObject):
         """ Returns a list of all active :class:`~plexapi.media.TranscodeSession` objects. """
         return self.fetchItems('/transcode/sessions')
 
-    def startAlertListener(self, callback=None):
-        """ Creates a websocket connection to the Plex Server to optionally recieve
+    def startAlertListener(self, callback=None, callbackError=None):
+        """ Creates a websocket connection to the Plex Server to optionally receive
             notifications. These often include messages from Plex about media scans
             as well as updates to currently running Transcode Sessions.
 
-            NOTE: You need websocket-client installed in order to use this feature.
-            >> pip install websocket-client
+            Returns a new :class:`~plexapi.alert.AlertListener` object.
+
+            Note: ``websocket-client`` must be installed in order to use this feature.
+
+            .. code-block:: python
+
+                >> pip install websocket-client
 
             Parameters:
-                callback (func): Callback function to call on recieved messages.
+                callback (func): Callback function to call on received messages.
+                callbackError (func): Callback function to call on errors.
 
             Raises:
                 :exc:`~plexapi.exception.Unsupported`: Websocket-client not installed.
         """
-        notifier = AlertListener(self, callback)
+        notifier = AlertListener(self, callback, callbackError)
         notifier.start()
         return notifier
 
-    def transcodeImage(self, media, height, width, opacity=100, saturation=100):
-        """ Returns the URL for a transcoded image from the specified media object.
-            Returns None if no media specified (needed if user tries to pass thumb
-            or art directly).
+    def transcodeImage(self, imageUrl, height, width,
+                       opacity=None, saturation=None, blur=None, background=None, blendColor=None,
+                       minSize=True, upscale=True, imageFormat=None):
+        """ Returns the URL for a transcoded image.
 
             Parameters:
+                imageUrl (str): The URL to the image
+                    (eg. returned by :func:`~plexapi.mixins.PosterUrlMixin.thumbUrl`
+                    or :func:`~plexapi.mixins.ArtUrlMixin.artUrl`).
+                    The URL can be an online image.
                 height (int): Height to transcode the image to.
                 width (int): Width to transcode the image to.
-                opacity (int): Opacity of the resulting image (possibly deprecated).
-                saturation (int): Saturating of the resulting image.
+                opacity (int, optional): Change the opacity of the image (0 to 100)
+                saturation (int, optional): Change the saturation of the image (0 to 100).
+                blur (int, optional): The blur to apply to the image in pixels (e.g. 3).
+                background (str, optional): The background hex colour to apply behind the opacity (e.g. '000000').
+                blendColor (str, optional): The hex colour to blend the image with (e.g. '000000').
+                minSize (bool, optional): Maintain smallest dimension. Default True.
+                upscale (bool, optional): Upscale the image if required. Default True.
+                imageFormat (str, optional): 'jpeg' (default) or 'png'.
         """
-        if media:
-            transcode_url = '/photo/:/transcode?height=%s&width=%s&opacity=%s&saturation=%s&url=%s' % (
-                height, width, opacity, saturation, media)
-            return self.url(transcode_url, includeToken=True)
+        params = {
+            'url': imageUrl,
+            'height': height,
+            'width': width,
+            'minSize': int(bool(minSize)),
+            'upscale': int(bool(upscale))
+        }
+        if opacity is not None:
+            params['opacity'] = opacity
+        if saturation is not None:
+            params['saturation'] = saturation
+        if blur is not None:
+            params['blur'] = blur
+        if background is not None:
+            params['background'] = str(background).strip('#')
+        if blendColor is not None:
+            params['blendColor'] = str(blendColor).strip('#')
+        if imageFormat is not None:
+            params['format'] = imageFormat.lower()
+
+        key = f'/photo/:/transcode{utils.joinArgs(params)}'
+        return self.url(key, includeToken=True)
 
     def url(self, key, includeToken=None):
         """ Build a URL string with proper token argument.  Token will be appended to the URL
@@ -620,8 +882,8 @@ class PlexServer(PlexObject):
         """
         if self._token and (includeToken or self._showSecrets):
             delim = '&' if '?' in key else '?'
-            return '%s%s%sX-Plex-Token=%s' % (self._baseurl, key, delim, self._token)
-        return '%s%s' % (self._baseurl, key)
+            return f'{self._baseurl}{key}{delim}X-Plex-Token={self._token}'
+        return f'{self._baseurl}{key}'
 
     def refreshSynclist(self):
         """ Force PMS to download new SyncList from Plex.tv. """
@@ -655,7 +917,7 @@ class PlexServer(PlexObject):
             log.debug('Plex is currently not allowed to delete media. Toggle set to not allow, exiting.')
             raise BadRequest('Plex is currently not allowed to delete media. Toggle set to not allow, exiting.')
         value = 1 if toggle is True else 0
-        return self.query('/:/prefs?allowMediaDeletion=%s' % value, self._session.put)
+        return self.query(f'/:/prefs?allowMediaDeletion={value}', self._session.put)
 
     def bandwidth(self, timespan=None, **kwargs):
         """ Returns a list of :class:`~plexapi.server.StatisticsBandwidth` objects
@@ -706,8 +968,7 @@ class PlexServer(PlexObject):
                         gigabytes = round(bandwidth.bytes / 1024**3, 3)
                         local = 'local' if bandwidth.lan else 'remote'
                         date = bandwidth.at.strftime('%Y-%m-%d')
-                        print('%s used %s GB of %s bandwidth on %s from %s'
-                              % (account.name, gigabytes, local, date, device.name))
+                        print(f'{account.name} used {gigabytes} GB of {local} bandwidth on {date} from {device.name}')
 
         """
         params = {}
@@ -725,27 +986,27 @@ class PlexServer(PlexObject):
             try:
                 params['timespan'] = timespans[timespan]
             except KeyError:
-                raise BadRequest('Invalid timespan specified: %s. '
-                    'Available timespans: %s' % (timespan, ', '.join(timespans.keys())))
+                raise BadRequest(f"Invalid timespan specified: {timespan}. "
+                                 f"Available timespans: {', '.join(timespans.keys())}")
 
         filters = {'accountID', 'at', 'at<', 'at>', 'bytes', 'bytes<', 'bytes>', 'deviceID', 'lan'}
 
         for key, value in kwargs.items():
             if key not in filters:
-                raise BadRequest('Unknown filter: %s=%s' % (key, value))
+                raise BadRequest(f'Unknown filter: {key}={value}')
             if key.startswith('at'):
                 try:
-                    value = cast(int, value.timestamp())
+                    value = utils.cast(int, value.timestamp())
                 except AttributeError:
-                    raise BadRequest('Time frame filter must be a datetime object: %s=%s' % (key, value))
+                    raise BadRequest(f'Time frame filter must be a datetime object: {key}={value}')
             elif key.startswith('bytes') or key == 'lan':
-                value = cast(int, value)
+                value = utils.cast(int, value)
             elif key == 'accountID':
                 if value == self.myPlexAccount().id:
                     value = 1  # The admin account is accountID=1
             params[key] = value
 
-        key = '/statistics/bandwidth?%s' % urlencode(params)
+        key = f'/statistics/bandwidth?{urlencode(params)}'
         return self.fetchItems(key, StatisticsBandwidth)
 
     def resources(self):
@@ -753,6 +1014,38 @@ class PlexServer(PlexObject):
             with the Plex server dashboard resources data. """
         key = '/statistics/resources?timespan=6'
         return self.fetchItems(key, StatisticsResources)
+
+    def _buildWebURL(self, base=None, endpoint=None, **kwargs):
+        """ Build the Plex Web URL for the object.
+
+            Parameters:
+                base (str): The base URL before the fragment (``#!``).
+                    Default is https://app.plex.tv/desktop.
+                endpoint (str): The Plex Web URL endpoint.
+                    None for server, 'playlist' for playlists, 'details' for all other media types.
+                **kwargs (dict): Dictionary of URL parameters.
+        """
+        if base is None:
+            base = 'https://app.plex.tv/desktop/'
+
+        if endpoint:
+            return f'{base}#!/server/{self.machineIdentifier}/{endpoint}{utils.joinArgs(kwargs)}'
+        else:
+            return f'{base}#!/media/{self.machineIdentifier}/com.plexapp.plugins.library{utils.joinArgs(kwargs)}'
+
+    def getWebURL(self, base=None, playlistTab=None):
+        """ Returns the Plex Web URL for the server.
+
+            Parameters:
+                base (str): The base URL before the fragment (``#!``).
+                    Default is https://app.plex.tv/desktop.
+                playlistTab (str): The playlist tab (audio, video, photo). Only used for the playlist URL.
+        """
+        if playlistTab is not None:
+            params = {'source': 'playlists', 'pivot': f'playlists.{playlistTab}'}
+        else:
+            params = {'key': '/hubs', 'pageType': 'hub'}
+        return self._buildWebURL(base=base, **params)
 
 
 class Account(PlexObject):
@@ -766,7 +1059,6 @@ class Account(PlexObject):
             data (ElementTree): Response from PlexServer used to build this object (optional).
 
         Attributes:
-            authToken (str): Plex authentication token to access the server.
             mappingError (str): Unknown
             mappingErrorMessage (str): Unknown
             mappingState (str): Unknown
@@ -787,8 +1079,7 @@ class Account(PlexObject):
     key = '/myplex/account'
 
     def _loadData(self, data):
-        self._data = data
-        self.authToken = data.attrib.get('authToken')
+        """ Load attribute values from Plex XML response. """
         self.username = data.attrib.get('username')
         self.mappingState = data.attrib.get('mappingState')
         self.mappingError = data.attrib.get('mappingError')
@@ -799,7 +1090,7 @@ class Account(PlexObject):
         self.privateAddress = data.attrib.get('privateAddress')
         self.privatePort = data.attrib.get('privatePort')
         self.subscriptionFeatures = utils.toList(data.attrib.get('subscriptionFeatures'))
-        self.subscriptionActive = cast(bool, data.attrib.get('subscriptionActive'))
+        self.subscriptionActive = utils.cast(bool, data.attrib.get('subscriptionActive'))
         self.subscriptionState = data.attrib.get('subscriptionState')
 
 
@@ -808,9 +1099,9 @@ class Activity(PlexObject):
     key = '/activities'
 
     def _loadData(self, data):
-        self._data = data
-        self.cancellable = cast(bool, data.attrib.get('cancellable'))
-        self.progress = cast(int, data.attrib.get('progress'))
+        """ Load attribute values from Plex XML response. """
+        self.cancellable = utils.cast(bool, data.attrib.get('cancellable'))
+        self.progress = utils.cast(int, data.attrib.get('progress'))
         self.title = data.attrib.get('title')
         self.subtitle = data.attrib.get('subtitle')
         self.type = data.attrib.get('type')
@@ -823,6 +1114,7 @@ class Release(PlexObject):
     key = '/updater/status'
 
     def _loadData(self, data):
+        """ Load attribute values from Plex XML response. """
         self.download_key = data.attrib.get('key')
         self.version = data.attrib.get('version')
         self.added = data.attrib.get('added')
@@ -848,14 +1140,14 @@ class SystemAccount(PlexObject):
     TAG = 'Account'
 
     def _loadData(self, data):
-        self._data = data
-        self.autoSelectAudio = cast(bool, data.attrib.get('autoSelectAudio'))
+        """ Load attribute values from Plex XML response. """
+        self.autoSelectAudio = utils.cast(bool, data.attrib.get('autoSelectAudio'))
         self.defaultAudioLanguage = data.attrib.get('defaultAudioLanguage')
         self.defaultSubtitleLanguage = data.attrib.get('defaultSubtitleLanguage')
-        self.id = cast(int, data.attrib.get('id'))
+        self.id = utils.cast(int, data.attrib.get('id'))
         self.key = data.attrib.get('key')
         self.name = data.attrib.get('name')
-        self.subtitleMode = cast(int, data.attrib.get('subtitleMode'))
+        self.subtitleMode = utils.cast(int, data.attrib.get('subtitleMode'))
         self.thumb = data.attrib.get('thumb')
         # For backwards compatibility
         self.accountID = self.id
@@ -868,7 +1160,7 @@ class SystemDevice(PlexObject):
         Attributes:
             TAG (str): 'Device'
             clientIdentifier (str): The unique identifier for the device.
-            createdAt (datatime): Datetime the device was created.
+            createdAt (datetime): Datetime the device was created.
             id (int): The ID of the device (not the same as :class:`~plexapi.myplex.MyPlexDevice` ID).
             key (str): API URL (/devices/<id>)
             name (str): The name of the device.
@@ -877,11 +1169,11 @@ class SystemDevice(PlexObject):
     TAG = 'Device'
 
     def _loadData(self, data):
-        self._data = data
+        """ Load attribute values from Plex XML response. """
         self.clientIdentifier = data.attrib.get('clientIdentifier')
         self.createdAt = utils.toDatetime(data.attrib.get('createdAt'))
-        self.id = cast(int, data.attrib.get('id'))
-        self.key = '/devices/%s' % self.id
+        self.id = utils.cast(int, data.attrib.get('id'))
+        self.key = f'/devices/{self.id}'
         self.name = data.attrib.get('name')
         self.platform = data.attrib.get('platform')
 
@@ -892,32 +1184,34 @@ class StatisticsBandwidth(PlexObject):
         Attributes:
             TAG (str): 'StatisticsBandwidth'
             accountID (int): The associated :class:`~plexapi.server.SystemAccount` ID.
-            at (datatime): Datetime of the bandwidth data.
-            bytes (int): The total number of bytes for the specified timespan.
+            at (datetime): Datetime of the bandwidth data.
+            bytes (int): The total number of bytes for the specified time span.
             deviceID (int): The associated :class:`~plexapi.server.SystemDevice` ID.
-            lan (bool): True or False wheter the bandwidth is local or remote.
-            timespan (int): The timespan for the bandwidth data.
+            lan (bool): True or False whether the bandwidth is local or remote.
+            timespan (int): The time span for the bandwidth data.
                 1: months, 2: weeks, 3: days, 4: hours, 6: seconds.
 
     """
     TAG = 'StatisticsBandwidth'
 
     def _loadData(self, data):
-        self._data = data
-        self.accountID = cast(int, data.attrib.get('accountID'))
+        """ Load attribute values from Plex XML response. """
+        self.accountID = utils.cast(int, data.attrib.get('accountID'))
         self.at = utils.toDatetime(data.attrib.get('at'))
-        self.bytes = cast(int, data.attrib.get('bytes'))
-        self.deviceID = cast(int, data.attrib.get('deviceID'))
-        self.lan = cast(bool, data.attrib.get('lan'))
-        self.timespan = cast(int, data.attrib.get('timespan'))
+        self.bytes = utils.cast(int, data.attrib.get('bytes'))
+        self.deviceID = utils.cast(int, data.attrib.get('deviceID'))
+        self.lan = utils.cast(bool, data.attrib.get('lan'))
+        self.timespan = utils.cast(int, data.attrib.get('timespan'))
 
     def __repr__(self):
-        return '<%s>' % ':'.join([p for p in [
-            self.__class__.__name__,
-            self._clean(self.accountID),
-            self._clean(self.deviceID),
-            self._clean(int(self.at.timestamp()))
-        ] if p])
+        return '<{}>'.format(
+            ':'.join([p for p in [
+                self.__class__.__name__,
+                self._clean(self.accountID),
+                self._clean(self.deviceID),
+                self._clean(int(self.at.timestamp()))
+            ] if p])
+        )
 
     def account(self):
         """ Returns the :class:`~plexapi.server.SystemAccount` associated with the bandwidth data. """
@@ -933,26 +1227,67 @@ class StatisticsResources(PlexObject):
 
         Attributes:
             TAG (str): 'StatisticsResources'
-            at (datatime): Datetime of the resource data.
+            at (datetime): Datetime of the resource data.
             hostCpuUtilization (float): The system CPU usage %.
             hostMemoryUtilization (float): The Plex Media Server CPU usage %.
             processCpuUtilization (float): The system RAM usage %.
             processMemoryUtilization (float): The Plex Media Server RAM usage %.
-            timespan (int): The timespan for the resource data (6: seconds).
+            timespan (int): The time span for the resource data (6: seconds).
     """
     TAG = 'StatisticsResources'
 
     def _loadData(self, data):
-        self._data = data
+        """ Load attribute values from Plex XML response. """
         self.at = utils.toDatetime(data.attrib.get('at'))
-        self.hostCpuUtilization = cast(float, data.attrib.get('hostCpuUtilization'))
-        self.hostMemoryUtilization = cast(float, data.attrib.get('hostMemoryUtilization'))
-        self.processCpuUtilization = cast(float, data.attrib.get('processCpuUtilization'))
-        self.processMemoryUtilization = cast(float, data.attrib.get('processMemoryUtilization'))
-        self.timespan = cast(int, data.attrib.get('timespan'))
+        self.hostCpuUtilization = utils.cast(float, data.attrib.get('hostCpuUtilization'))
+        self.hostMemoryUtilization = utils.cast(float, data.attrib.get('hostMemoryUtilization'))
+        self.processCpuUtilization = utils.cast(float, data.attrib.get('processCpuUtilization'))
+        self.processMemoryUtilization = utils.cast(float, data.attrib.get('processMemoryUtilization'))
+        self.timespan = utils.cast(int, data.attrib.get('timespan'))
 
     def __repr__(self):
-        return '<%s>' % ':'.join([p for p in [
-            self.__class__.__name__,
-            self._clean(int(self.at.timestamp()))
-        ] if p])
+        return f"<{':'.join([p for p in [self.__class__.__name__, self._clean(int(self.at.timestamp()))] if p])}>"
+
+
+@utils.registerPlexObject
+class ButlerTask(PlexObject):
+    """ Represents a single scheduled butler task.
+
+        Attributes:
+            TAG (str): 'ButlerTask'
+            description (str): The description of the task.
+            enabled (bool): Whether the task is enabled.
+            interval (int): The interval the task is run in days.
+            name (str): The name of the task.
+            scheduleRandomized (bool): Whether the task schedule is randomized.
+            title (str): The title of the task.
+    """
+    TAG = 'ButlerTask'
+
+    def _loadData(self, data):
+        """ Load attribute values from Plex XML response. """
+        self.description = data.attrib.get('description')
+        self.enabled = utils.cast(bool, data.attrib.get('enabled'))
+        self.interval = utils.cast(int, data.attrib.get('interval'))
+        self.name = data.attrib.get('name')
+        self.scheduleRandomized = utils.cast(bool, data.attrib.get('scheduleRandomized'))
+        self.title = data.attrib.get('title')
+
+
+class Identity(PlexObject):
+    """ Represents a server identity.
+
+        Attributes:
+            claimed (bool): True or False if the server is claimed.
+            machineIdentifier (str): The Plex server machine identifier.
+            version (str): The Plex server version.
+    """
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__}:{self.machineIdentifier}>"
+
+    def _loadData(self, data):
+        """ Load attribute values from Plex XML response. """
+        self.claimed = utils.cast(bool, data.attrib.get('claimed'))
+        self.machineIdentifier = data.attrib.get('machineIdentifier')
+        self.version = data.attrib.get('version')

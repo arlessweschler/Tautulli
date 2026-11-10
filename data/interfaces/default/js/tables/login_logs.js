@@ -10,6 +10,10 @@ login_log_table_options = {
         "loadingRecords": '<i class="fa fa-refresh fa-spin"></i> Loading items...</div>'
     },
     "stateSave": true,
+    "stateSaveParams": function (settings, data) {
+        data.search.search = "";
+        data.start = 0;
+    },
     "stateDuration": 0,
     "pagingType": "full_numbers",
     "processing": false,
@@ -50,9 +54,9 @@ login_log_table_options = {
             "data": "ip_address",
             "createdCell": function (td, cellData, rowData, row, col) {
                 if (cellData) {
-                    isPrivateIP(cellData).then(function () {
+                    isPrivateIP(cellData).done(function () {
                         $(td).html(cellData || 'n/a');
-                    }, function () {
+                    }).fail(function () {
                         external_ip = '<span class="external-ip-tooltip" data-toggle="tooltip" title="External IP"><i class="fa fa-map-marker fa-fw"></i></span>';
                         $(td).html('<a href="javascript:void(0)" data-toggle="modal" data-target="#ip-info-modal">' + external_ip + cellData + '</a>');
                     });
@@ -153,7 +157,7 @@ $('.login_log_table').on('click', '> tbody > tr > td> .sign-out-tooltip', functi
     var row = login_log_table.row(tr);
     var rowData = row.data();
 
-    $.get('logout_user_session', {
+    $.post('logout_user_session', {
         row_ids: rowData['row_id'],
         current: rowData['current']
     }).then(function () {

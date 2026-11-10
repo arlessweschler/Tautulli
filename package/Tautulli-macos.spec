@@ -5,6 +5,7 @@ sys.modules['FixTk'] = None
 
 import os
 VERSION = os.getenv('VERSION', '0.0.0')
+ARCH = os.getenv('ARCH', 'arm64')
 
 block_cipher = None
 
@@ -34,7 +35,9 @@ exe = EXE(
     exclude_binaries=True,
     name='Tautulli',
     console=False,
-    icon='../data/interfaces/default/images/logo-circle.icns'
+    icon='../data/interfaces/default/images/logo-circle.icns',
+    contents_directory='.',
+    target_arch=ARCH
 )
 coll = COLLECT(
     exe,

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -15,35 +15,24 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import next
-from future.builtins import str
-from future.builtins import object
-from future.moves.urllib.parse import parse_qsl
+from urllib.parse import parse_qsl
 
 import arrow
 import httpagentparser
-from datetime import datetime, timedelta
 
 import plexpy
-if plexpy.PYTHON2:
-    import common
-    import database
-    import datatables
-    import helpers
-    import libraries
-    import logger
-    import plextv
-    import session
-else:
-    from plexpy import common
-    from plexpy import database
-    from plexpy import datatables
-    from plexpy import helpers
-    from plexpy import libraries
-    from plexpy import logger
-    from plexpy import plextv
-    from plexpy import session
+from plexpy import common
+from plexpy import database
+from plexpy import datatables
+from plexpy import helpers
+from plexpy import libraries
+from plexpy import logger
+from plexpy import plextv
+from plexpy import session
+
+
+def archived_user_cond(column='session_history.user_id', cond_prefix='AND'):
+    return "%s %s NOT IN (SELECT user_id FROM users WHERE is_archived = 1) " % (cond_prefix, column)
 
 
 def refresh_users():
@@ -60,22 +49,33 @@ def refresh_users():
 
         # Keep track of user_id to update is_active status
         user_ids = [0]  # Local user always considered active
+        new_users = []
+
+        # Snapshot the archived users which are currently inactive. The upsert below sets
+        # is_active = 1 for every user returned by Plex, so this has to be read up front.
+        inactive_archived = []
+        if plexpy.CONFIG.AUTO_UNARCHIVE_USERS:
+            inactive_archived = [item['user_id'] for item in
+                                 monitor_db.select("SELECT user_id FROM users "
+                                                   "WHERE is_archived = 1 AND is_active = 0")]
 
         for item in result:
-            user_ids.append(helpers.cast_to_int(item['user_id']))
-
             if item.get('shared_libraries'):
                 item['shared_libraries'] = ';'.join(item['shared_libraries'])
+                # Only append user if libraries are shared
+                user_ids.append(helpers.cast_to_int(item['user_id']))
             elif item.get('server_token'):
                 libs = libraries.Libraries().get_sections()
                 item['shared_libraries'] = ';'.join([str(l['section_id']) for l in libs])
+                # Only append user if libraries are shared
+                user_ids.append(helpers.cast_to_int(item['user_id']))
 
             keys_dict = {"user_id": item.pop('user_id')}
 
             # Check if we've set a custom avatar if so don't overwrite it.
             if keys_dict['user_id']:
-                avatar_urls = monitor_db.select('SELECT thumb, custom_avatar_url '
-                                                'FROM users WHERE user_id = ?',
+                avatar_urls = monitor_db.select("SELECT thumb, custom_avatar_url "
+                                                "FROM users WHERE user_id = ?",
                                                 [keys_dict['user_id']])
                 if avatar_urls:
                     if not avatar_urls[0]['custom_avatar_url'] or \
@@ -84,15 +84,38 @@ def refresh_users():
                 else:
                     item['custom_avatar_url'] = item['thumb']
 
-            monitor_db.upsert('users', key_dict=keys_dict, value_dict=item)
+            # Check if title is the same as the username
+            if item['title'] == item['username']:
+                item['title'] = None
 
-        query = 'UPDATE users SET is_active = 0 WHERE user_id NOT IN ({})'.format(', '.join(['?'] * len(user_ids)))
+            # Check if username is blank (Managed Users)
+            if not item['username']:
+                item['username'] = item['title']
+
+            if monitor_db.upsert('users', key_dict=keys_dict, value_dict=item) == 'insert':
+                new_users.append(item['username'])
+
+        # Unarchive users which became active again on the Plex server. Only users which were
+        # inactive before this refresh are unarchived, so manually archived users which never
+        # left the server stay archived.
+        returning_users = [user_id for user_id in inactive_archived if user_id in user_ids]
+        if returning_users:
+            logger.info("Tautulli Users :: Unarchiving %s user(s) which returned to the Plex server."
+                        % len(returning_users))
+            query = "UPDATE users SET is_archived = 0 WHERE user_id IN ({})".format(
+                ", ".join(["?"] * len(returning_users)))
+            monitor_db.action(query=query, args=returning_users)
+
+        query = "UPDATE users SET is_active = 0 WHERE user_id NOT IN ({})".format(", ".join(["?"] * len(user_ids)))
         monitor_db.action(query=query, args=user_ids)
 
-        logger.info("Tautulli Users :: Users list refreshed.")
+        # Add new users to logger username filter
+        logger.filter_usernames(new_users)
+
+        logger.info("Tautulli Users :: Users list refreshed. %s users returned, %s new.", len(result), len(new_users))
         return True
     else:
-        logger.warn("Tautulli Users :: Unable to refresh users list.")
+        logger.error("Tautulli Users :: Unable to refresh users list.")
         return False
 
 
@@ -101,15 +124,17 @@ class Users(object):
     def __init__(self):
         pass
 
-    def get_datatables_list(self, kwargs=None, grouping=None):
-        default_return = {'recordsFiltered': 0,
-                          'recordsTotal': 0,
-                          'draw': 0,
-                          'data': []}
-
+    def get_datatables_list(self, kwargs=None, grouping=None, include_archived=False, include_deleted=False):
         data_tables = datatables.DataTables()
 
-        custom_where = [['users.deleted_user', 0]]
+        custom_where = []
+
+        # A guest never sees deleted users
+        if not include_deleted or session.get_session_user_id():
+            custom_where.append(['users.deleted_user', 0])
+
+        if not include_archived:
+            custom_where.append(['users.is_archived', 0])
 
         if grouping is None:
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
@@ -120,62 +145,91 @@ class Users(object):
         if kwargs.get('user_id'):
             custom_where.append(['users.user_id', kwargs.get('user_id')])
 
-        group_by = 'session_history.reference_id' if grouping else 'session_history.id'
+        group_by = 'reference_id' if grouping else 'id'
 
-        columns = ['users.id AS row_id',
-                   'users.user_id',
-                   'users.username',
-                   '(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = "" \
-                    THEN users.username ELSE users.friendly_name END) AS friendly_name',
-                   'users.thumb AS user_thumb',
-                   'users.custom_avatar_url AS custom_thumb',
-                   'COUNT(DISTINCT %s) AS plays' % group_by,
-                   'SUM(CASE WHEN session_history.stopped > 0 THEN (session_history.stopped - session_history.started) \
-                    ELSE 0 END) - SUM(CASE WHEN session_history.paused_counter IS NULL THEN 0 ELSE \
-                    session_history.paused_counter END) AS duration',
-                   'MAX(session_history.started) AS last_seen',
-                   'MAX(session_history.id) AS history_row_id',
-                   'session_history_metadata.full_title AS last_played',
-                   'session_history.ip_address',
-                   'session_history.platform',
-                   'session_history.player',
-                   'session_history.rating_key',
-                   'session_history_metadata.media_type',
-                   'session_history_metadata.thumb',
-                   'session_history_metadata.parent_thumb',
-                   'session_history_metadata.grandparent_thumb',
-                   'session_history_metadata.parent_title',
-                   'session_history_metadata.year',
-                   'session_history_metadata.media_index',
-                   'session_history_metadata.parent_media_index',
-                   'session_history_metadata.live',
-                   'session_history_metadata.added_at',
-                   'session_history_metadata.originally_available_at',
-                   'session_history_metadata.guid',
-                   'session_history_media_info.transcode_decision',
-                   'users.do_notify AS do_notify',
-                   'users.keep_history AS keep_history',
-                   'users.allow_guest AS allow_guest',
-                   'users.is_active AS is_active'
+        # Aggregate the narrow session_history table once per user, then
+        # join the wide metadata/media_info tables only for each user's
+        # most recent history row. The old form joined every history row
+        # of every user to both wide tables on every table draw.
+        archived_cond = '' if include_archived else libraries.archived_library_cond(cond_prefix='WHERE')
+
+        # The shown row is the play with the latest start, and the highest id on a tie.
+        # The (key, started) index serves the lookup.
+        last_row_cond = '' if include_archived else libraries.archived_library_cond(column='s2.section_id')
+
+        history_agg = (
+            "(SELECT user_id, "
+            "COUNT(DISTINCT %s) AS plays, "
+            "SUM(CASE WHEN stopped > 0 THEN (stopped - started) ELSE 0 END) - "
+            "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) AS duration, "
+            "MAX(started) AS last_seen, "
+            "(SELECT s2.id FROM session_history AS s2 "
+            "WHERE s2.user_id = session_history.user_id %s"
+            "ORDER BY s2.started DESC, s2.id DESC LIMIT 1) AS history_row_id "
+            "FROM session_history "
+            "%s"
+            "GROUP BY user_id) AS history_agg" % (group_by, last_row_cond, archived_cond)
+        )
+
+        columns = ["users.id AS row_id",
+                   "users.user_id",
+                   "users.username",
+                   "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
+                    THEN users.username ELSE users.friendly_name END) AS friendly_name",
+                   "users.title",
+                   "users.email",
+                   "users.thumb AS user_thumb",
+                   "users.custom_avatar_url AS custom_thumb",
+                   "COALESCE(history_agg.plays, 0) AS plays",
+                   "COALESCE(history_agg.duration, 0) AS duration",
+                   "history_agg.last_seen",
+                   "history_agg.history_row_id",
+                   "session_history_metadata.full_title AS last_played",
+                   "session_history.ip_address",
+                   "session_history.platform",
+                   "session_history.player",
+                   "session_history.rating_key",
+                   "session_history_metadata.media_type",
+                   "session_history_metadata.thumb",
+                   "session_history_metadata.parent_thumb",
+                   "session_history_metadata.grandparent_thumb",
+                   "session_history_metadata.parent_title",
+                   "session_history_metadata.year",
+                   "session_history_metadata.media_index",
+                   "session_history_metadata.parent_media_index",
+                   "session_history_metadata.live",
+                   "session_history_metadata.added_at",
+                   "session_history_metadata.originally_available_at",
+                   "session_history_metadata.guid",
+                   "session_history_media_info.transcode_decision",
+                   "users.keep_history AS keep_history",
+                   "users.allow_guest AS allow_guest",
+                   "users.is_active AS is_active",
+                   "users.is_archived AS is_archived",
+                   "users.deleted_user AS deleted_user"
                    ]
         try:
             query = data_tables.ssp_query(table_name='users',
                                           columns=columns,
                                           custom_where=custom_where,
-                                          group_by=['users.user_id'],
+                                          group_by=[],
                                           join_types=['LEFT OUTER JOIN',
                                                       'LEFT OUTER JOIN',
+                                                      'LEFT OUTER JOIN',
                                                       'LEFT OUTER JOIN'],
-                                          join_tables=['session_history',
+                                          join_tables=[history_agg,
+                                                       'session_history',
                                                        'session_history_metadata',
                                                        'session_history_media_info'],
-                                          join_evals=[['session_history.user_id', 'users.user_id'],
-                                                      ['session_history.id', 'session_history_metadata.id'],
-                                                      ['session_history.id', 'session_history_media_info.id']],
+                                          join_evals=[['history_agg.user_id', 'users.user_id'],
+                                                      ['session_history.id', 'history_agg.history_row_id'],
+                                                      ['session_history_metadata.id', 'history_agg.history_row_id'],
+                                                      ['session_history_media_info.id', 'history_agg.history_row_id'],
+                                                      ],
                                           kwargs=kwargs)
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_list: %s." % e)
-            return default_return
+            logger.exception("Tautulli Users :: Unable to execute database query for get_list: %s." % e)
+            return
 
         users = query['result']
 
@@ -202,6 +256,8 @@ class Users(object):
                    'user_id': item['user_id'],
                    'username': item['username'],
                    'friendly_name': item['friendly_name'],
+                   'title': item['title'],
+                   'email': item['email'],
                    'user_thumb': user_thumb,
                    'plays': item['plays'],
                    'duration': item['duration'],
@@ -222,10 +278,11 @@ class Users(object):
                    'originally_available_at': item['originally_available_at'],
                    'guid': item['guid'],
                    'transcode_decision': item['transcode_decision'],
-                   'do_notify': helpers.checked(item['do_notify']),
-                   'keep_history': helpers.checked(item['keep_history']),
-                   'allow_guest': helpers.checked(item['allow_guest']),
-                   'is_active': item['is_active']
+                   'keep_history': item['keep_history'],
+                   'allow_guest': item['allow_guest'],
+                   'is_active': item['is_active'],
+                   'is_archived': item['is_archived'],
+                   'deleted_user': item['deleted_user']
                    }
 
             rows.append(row)
@@ -238,65 +295,91 @@ class Users(object):
 
         return dict
 
-    def get_datatables_unique_ips(self, user_id=None, kwargs=None):
-        default_return = {'recordsFiltered': 0,
-                          'recordsTotal': 0,
-                          'draw': 0,
-                          'data': []}
-
+    def get_datatables_unique_ips(self, user_id=None, kwargs=None, include_archived=False):
         if not session.allow_session_user(user_id):
-            return default_return
+            return {
+                'recordsFiltered': 0,
+                'recordsTotal': 0,
+                'draw': 0,
+                'data': []
+            }
 
         data_tables = datatables.DataTables()
 
         custom_where = ['users.user_id', user_id]
 
-        columns = ['session_history.id AS history_row_id',
-                   'MIN(session_history.started) AS first_seen',
-                   'MAX(session_history.started) AS last_seen',
-                   'session_history.ip_address',
-                   'COUNT(session_history.id) AS play_count',
-                   'session_history.platform',
-                   'session_history.player',
-                   'session_history.rating_key',
-                   'session_history_metadata.full_title AS last_played',
-                   'session_history_metadata.thumb',
-                   'session_history_metadata.parent_thumb',
-                   'session_history_metadata.grandparent_thumb',
-                   'session_history_metadata.media_type',
-                   'session_history_metadata.parent_title',
-                   'session_history_metadata.year',
-                   'session_history_metadata.media_index',
-                   'session_history_metadata.parent_media_index',
-                   'session_history_metadata.live',
-                   'session_history_metadata.added_at',
-                   'session_history_metadata.originally_available_at',
-                   'session_history_metadata.guid',
-                   'session_history_media_info.transcode_decision',
-                   'session_history.user',
-                   'session_history.user_id as custom_user_id',
-                   '(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = "" \
-                    THEN users.username ELSE users.friendly_name END) AS friendly_name'
+        # Aggregate the narrow session_history table per IP first, then
+        # join the wide tables only for each IP's most recent history row
+        # (the old form joined every history row of the user to the wide
+        # tables and picked the displayed row arbitrarily)
+        # The shown row is the play with the latest start, and the highest id on a tie.
+        archived_cond = '' if include_archived else libraries.archived_library_cond()
+        last_row_cond = '' if include_archived else libraries.archived_library_cond(column='s2.section_id')
+
+        history_agg = (
+            "(SELECT ip_address AS agg_ip_address, "
+            "MIN(started) AS first_seen, "
+            "MAX(started) AS last_seen, "
+            "COUNT(id) AS play_count, "
+            "(SELECT s2.id FROM session_history AS s2 "
+            "WHERE s2.user_id = %d AND s2.ip_address IS session_history.ip_address %s"
+            "ORDER BY s2.started DESC, s2.id DESC LIMIT 1) AS history_row_id "
+            "FROM session_history "
+            "WHERE user_id = %d %s"
+            "GROUP BY ip_address) AS history_agg" % (
+                helpers.cast_to_int(user_id), last_row_cond,
+                helpers.cast_to_int(user_id), archived_cond)
+        )
+
+        columns = ["session_history.id AS history_row_id",
+                   "history_agg.first_seen",
+                   "history_agg.last_seen",
+                   "session_history.ip_address",
+                   "history_agg.play_count",
+                   "session_history.platform",
+                   "session_history.player",
+                   "session_history.rating_key",
+                   "session_history_metadata.full_title AS last_played",
+                   "session_history_metadata.thumb",
+                   "session_history_metadata.parent_thumb",
+                   "session_history_metadata.grandparent_thumb",
+                   "session_history_metadata.media_type",
+                   "session_history_metadata.parent_title",
+                   "session_history_metadata.year",
+                   "session_history_metadata.media_index",
+                   "session_history_metadata.parent_media_index",
+                   "session_history_metadata.live",
+                   "session_history_metadata.added_at",
+                   "session_history_metadata.originally_available_at",
+                   "session_history_metadata.guid",
+                   "session_history_media_info.transcode_decision",
+                   "session_history.user",
+                   "session_history.user_id as custom_user_id",
+                   "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
+                    THEN users.username ELSE users.friendly_name END) AS friendly_name"
                    ]
 
         try:
             query = data_tables.ssp_query(table_name='session_history',
                                           columns=columns,
                                           custom_where=[custom_where],
-                                          group_by=['ip_address'],
+                                          group_by=[],
                                           join_types=['JOIN',
                                                       'JOIN',
+                                                      'JOIN',
                                                       'JOIN'],
-                                          join_tables=['users',
+                                          join_tables=[history_agg,
+                                                       'users',
                                                        'session_history_metadata',
                                                        'session_history_media_info'],
-                                          join_evals=[['session_history.user_id', 'users.user_id'],
+                                          join_evals=[['session_history.id', 'history_agg.history_row_id'],
+                                                      ['session_history.user_id', 'users.user_id'],
                                                       ['session_history.id', 'session_history_metadata.id'],
                                                       ['session_history.id', 'session_history_media_info.id']],
                                           kwargs=kwargs)
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_unique_ips: %s." % e)
-            return default_return
+            logger.exception("Tautulli Users :: Unable to execute database query for get_unique_ips: %s." % e)
+            return
 
         results = query['result']
 
@@ -345,23 +428,37 @@ class Users(object):
 
         return dict
 
-    def set_config(self, user_id=None, friendly_name='', custom_thumb='', do_notify=1, keep_history=1, allow_guest=1):
+    def set_config(self, user_id=None, friendly_name=None, custom_thumb=None, keep_history=None, allow_guest=None,
+                   is_archived=None):
         if str(user_id).isdigit():
             monitor_db = database.MonitorDatabase()
 
+            user = monitor_db.select_single('SELECT username FROM users WHERE user_id = ?', [user_id])
+            if user.get('username') == friendly_name:
+                friendly_name = None
+
             key_dict = {'user_id': user_id}
-            value_dict = {'friendly_name': friendly_name,
-                          'custom_avatar_url': custom_thumb,
-                          'do_notify': do_notify,
-                          'keep_history': keep_history,
-                          'allow_guest': allow_guest
-                          }
+            value_dict = {}
+
+            if friendly_name is not None:
+                value_dict['friendly_name'] = friendly_name
+            if custom_thumb is not None:
+                value_dict['custom_avatar_url'] = custom_thumb
+            if keep_history is not None:
+                value_dict['keep_history'] = int(helpers.bool_true(keep_history))
+            if allow_guest is not None:
+                value_dict['allow_guest'] = int(helpers.bool_true(allow_guest))
+            if is_archived is not None:
+                value_dict['is_archived'] = int(helpers.bool_true(is_archived))
+
             try:
                 monitor_db.upsert('users', value_dict, key_dict)
+                if value_dict.get('is_archived'):
+                    self.clear_user_login_token(user_id=user_id)
             except Exception as e:
-                logger.warn("Tautulli Users :: Unable to execute database query for set_config: %s." % e)
+                logger.exception("Tautulli Users :: Unable to execute database query for set_config: %s." % e)
 
-    def get_details(self, user_id=None, user=None, email=None, include_last_seen=False):
+    def get_details(self, user_id=None, user=None, email=None, include_last_seen=False, include_archived=False):
         default_return = {'row_id': 0,
                           'user_id': 0,
                           'username': 'Local',
@@ -373,26 +470,27 @@ class Users(object):
                           'is_home_user': 0,
                           'is_allow_sync': 0,
                           'is_restricted': 0,
-                          'do_notify': 0,
                           'keep_history': 1,
                           'allow_guest': 0,
                           'deleted_user': 0,
+                          'is_archived': 0,
                           'shared_libraries': (),
                           'last_seen': None
                           }
 
-        if user_id is None and not user and not email:
+        if user_id in (None, '') and not user and not email:
             return default_return
 
         user_details = self.get_user_details(user_id=user_id, user=user, email=email,
-                                             include_last_seen=include_last_seen)
+                                             include_last_seen=include_last_seen,
+                                             include_archived=include_archived)
 
         if user_details:
             return user_details
 
         else:
             logger.warn("Tautulli Users :: Unable to retrieve user %s from database. Requesting user list refresh."
-                        % user_id if user_id else user)
+                        % (user_id if user_id else user))
             # Let's first refresh the user list to make sure the user isn't newly added and not in the db yet
             refresh_users()
 
@@ -404,43 +502,45 @@ class Users(object):
 
             else:
                 logger.warn("Tautulli Users :: Unable to retrieve user %s from database. Returning 'Local' user."
-                            % user_id if user_id else user)
+                            % (user_id if user_id else user))
                 # If there is no user data we must return something
                 # Use "Local" user to retain compatibility with PlexWatch database value
                 return default_return
 
-    def get_user_details(self, user_id=None, user=None, email=None, include_last_seen=False):
+    def get_user_details(self, user_id=None, user=None, email=None, include_last_seen=False,
+                         include_archived=False):
         last_seen = 'NULL'
         join = ''
         if include_last_seen:
-            last_seen = 'MAX(session_history.started)'
-            join = 'LEFT OUTER JOIN session_history ON users.user_id = session_history.user_id'
+            last_seen = "MAX(session_history.started)"
+            join = "LEFT OUTER JOIN session_history ON users.user_id = session_history.user_id " \
+                   + ('' if include_archived else libraries.archived_library_cond())
 
         monitor_db = database.MonitorDatabase()
 
         try:
             if str(user_id).isdigit():
-                where = 'users.user_id = ?'
+                where = "users.user_id = ?"
                 args = [user_id]
             elif user:
-                where = 'users.username = ?'
+                where = "users.username = ?"
                 args = [user]
             elif email:
-                where = 'users.email = ?'
+                where = "users.email = ?"
                 args = [email]
             else:
-                raise Exception('Missing user_id, username, or email')
+                raise Exception("Missing user_id, username, or email")
 
-            query = 'SELECT users.id AS row_id, users.user_id, username, friendly_name, ' \
-                    'thumb AS user_thumb, custom_avatar_url AS custom_thumb, ' \
-                    'email, is_active, is_admin, is_home_user, is_allow_sync, is_restricted, ' \
-                    'do_notify, keep_history, deleted_user, ' \
-                    'allow_guest, shared_libraries, %s AS last_seen ' \
-                    'FROM users %s ' \
-                    'WHERE %s COLLATE NOCASE' % (last_seen, join, where)
+            query = "SELECT users.id AS row_id, users.user_id, username, friendly_name, " \
+                    "thumb AS user_thumb, custom_avatar_url AS custom_thumb, " \
+                    "email, is_active, is_admin, is_home_user, is_allow_sync, is_restricted, " \
+                    "keep_history, deleted_user, is_archived, " \
+                    "allow_guest, shared_libraries, %s AS last_seen " \
+                    "FROM users %s " \
+                    "WHERE %s COLLATE NOCASE" % (last_seen, join, where)
             result = monitor_db.select(query, args=args)
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_user_details: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for get_user_details: %s." % e)
             result = []
 
         user_details = {}
@@ -473,16 +573,16 @@ class Users(object):
                                 'is_home_user': item['is_home_user'],
                                 'is_allow_sync': item['is_allow_sync'],
                                 'is_restricted': item['is_restricted'],
-                                'do_notify': item['do_notify'],
                                 'keep_history': item['keep_history'],
                                 'deleted_user': item['deleted_user'],
+                                'is_archived': item['is_archived'],
                                 'allow_guest': item['allow_guest'],
                                 'shared_libraries': shared_libraries,
                                 'last_seen': item['last_seen']
                                 }
         return user_details
 
-    def get_watch_time_stats(self, user_id=None, grouping=None, query_days=None):
+    def get_watch_time_stats(self, user_id=None, grouping=None, query_days=None, include_archived=False):
         if not session.allow_session_user(user_id):
             return []
 
@@ -490,49 +590,54 @@ class Users(object):
             grouping = plexpy.CONFIG.GROUP_HISTORY_TABLES
 
         if query_days and query_days is not None:
-            query_days = map(helpers.cast_to_int, str(query_days).split(','))
+            query_days = list(map(helpers.cast_to_int, str(query_days).split(',')))
         else:
             query_days = [1, 7, 30, 0]
+
+        timestamp = helpers.timestamp()
 
         monitor_db = database.MonitorDatabase()
 
         user_watch_time_stats = []
 
         group_by = 'reference_id' if grouping else 'id'
+        archived_cond = '' if include_archived else libraries.archived_library_cond(column='section_id')
 
-        for days in query_days:
-            timestamp = int((datetime.now(tz=plexpy.SYS_TIMEZONE) - timedelta(days=days)).timestamp())
+        if str(user_id).isdigit():
+            # Compute every requested window with conditional aggregation
+            # in a single pass over the user's history instead of one
+            # full aggregate query per window
+            select_parts = []
+            for i, days in enumerate(query_days):
+                if days > 0:
+                    timestamp_query = timestamp - days * 24 * 60 * 60
+                    select_parts.append(
+                        "SUM(CASE WHEN stopped >= %(ts)d THEN (stopped - started) - "
+                        "(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END) ELSE 0 END) "
+                        "AS total_time_%(i)d, "
+                        "COUNT(DISTINCT CASE WHEN stopped >= %(ts)d THEN %(group_by)s END) "
+                        "AS total_plays_%(i)d" % {'ts': timestamp_query, 'i': i, 'group_by': group_by})
+                else:
+                    select_parts.append(
+                        "(SUM(stopped - started) - "
+                        "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) "
+                        "AS total_time_%(i)d, "
+                        "COUNT(DISTINCT %(group_by)s) AS total_plays_%(i)d" % {'i': i, 'group_by': group_by})
 
             try:
-                if days > 0:
-                    if str(user_id).isdigit():
-                        query = 'SELECT (SUM(stopped - started) - ' \
-                                '   SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, ' \
-                                'COUNT(DISTINCT %s) AS total_plays ' \
-                                'FROM session_history ' \
-                                'WHERE stopped >= %s ' \
-                                'AND user_id = ? ' % (group_by, timestamp)
-                        result = monitor_db.select(query, args=[user_id])
-                    else:
-                        result = []
-                else:
-                    if str(user_id).isdigit():
-                        query = 'SELECT (SUM(stopped - started) - ' \
-                                '   SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, ' \
-                                'COUNT(DISTINCT %s) AS total_plays ' \
-                                'FROM session_history ' \
-                                'WHERE user_id = ? ' % group_by
-                        result = monitor_db.select(query, args=[user_id])
-                    else:
-                        result = []
+                query = "SELECT " + ", ".join(select_parts) + \
+                        " FROM session_history WHERE user_id = ? %s" % archived_cond
+                result = monitor_db.select_single(query, args=[user_id])
             except Exception as e:
-                logger.warn("Tautulli Users :: Unable to execute database query for get_watch_time_stats: %s." % e)
-                result = []
+                logger.exception("Tautulli Users :: Unable to execute database query for get_watch_time_stats: %s." % e)
+                return []
 
-            for item in result:
-                if item['total_time']:
-                    total_time = item['total_time']
-                    total_plays = item['total_plays']
+            for i, days in enumerate(query_days):
+                total_time = result.get('total_time_%d' % i)
+                # Match the old per-window behavior exactly: a window
+                # with no (or zero) watch time reports zero plays too
+                if total_time:
+                    total_plays = result.get('total_plays_%d' % i) or 0
                 else:
                     total_time = 0
                     total_plays = 0
@@ -546,7 +651,7 @@ class Users(object):
 
         return user_watch_time_stats
 
-    def get_player_stats(self, user_id=None, grouping=None):
+    def get_player_stats(self, user_id=None, grouping=None, include_archived=False):
         if not session.allow_session_user(user_id):
             return []
 
@@ -562,16 +667,19 @@ class Users(object):
 
         try:
             if str(user_id).isdigit():
-                query = 'SELECT player, COUNT(DISTINCT %s) as player_count, platform ' \
-                        'FROM session_history ' \
-                        'WHERE user_id = ? ' \
-                        'GROUP BY player ' \
-                        'ORDER BY player_count DESC' % group_by
+                query = "SELECT player, COUNT(DISTINCT %s) as total_plays, (SUM(stopped - started) - " \
+                        "SUM(CASE WHEN paused_counter IS NULL THEN 0 ELSE paused_counter END)) AS total_time, " \
+                        "platform " \
+                        "FROM session_history " \
+                        "WHERE user_id = ? %s" \
+                        "GROUP BY player " \
+                        "ORDER BY total_plays DESC, total_time DESC" % (
+                            group_by, '' if include_archived else libraries.archived_library_cond(column='section_id'))
                 result = monitor_db.select(query, args=[user_id])
             else:
                 result = []
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_player_stats: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for get_player_stats: %s." % e)
             result = []
 
         for item in result:
@@ -582,7 +690,8 @@ class Users(object):
             row = {'player_name': item['player'],
                    'platform': platform,
                    'platform_name': platform_name,
-                   'total_plays': item['player_count'],
+                   'total_plays': item['total_plays'],
+                   'total_time': item['total_time'],
                    'result_id': result_id
                    }
             player_stats.append(row)
@@ -590,7 +699,7 @@ class Users(object):
 
         return player_stats
 
-    def get_recently_watched(self, user_id=None, limit='10'):
+    def get_recently_watched(self, user_id=None, limit='10', include_archived=False):
         if not session.allow_session_user(user_id):
             return []
 
@@ -602,22 +711,35 @@ class Users(object):
 
         try:
             if str(user_id).isdigit():
-                query = 'SELECT session_history.id, session_history.media_type, guid, ' \
-                        'session_history.rating_key, session_history.parent_rating_key, session_history.grandparent_rating_key, ' \
-                        'title, parent_title, grandparent_title, original_title, ' \
-                        'thumb, parent_thumb, grandparent_thumb, media_index, parent_media_index, ' \
-                        'year, originally_available_at, added_at, live, started, user ' \
-                        'FROM session_history_metadata ' \
-                        'JOIN session_history ON session_history_metadata.id = session_history.id ' \
-                        'WHERE user_id = ? ' \
-                        'GROUP BY (CASE WHEN session_history.media_type = "track" THEN session_history.parent_rating_key ' \
-                        '   ELSE session_history.rating_key END) ' \
-                        'ORDER BY MAX(started) DESC LIMIT ?'
-                result = monitor_db.select(query, args=[user_id, limit])
+                # Find each item's most recent history row over the narrow
+                # table first, then join the wide metadata table for only
+                # the returned rows (the old form joined metadata to every
+                # history row of the user before grouping)
+                last_rows = monitor_db.select(
+                    "SELECT session_history.id, MAX(started) AS last_started "
+                    "FROM session_history "
+                    "WHERE user_id = ? %s"
+                    "GROUP BY (CASE WHEN media_type = 'track' THEN parent_rating_key "
+                    "   ELSE rating_key END) "
+                    "ORDER BY last_started DESC LIMIT ?" % (
+                        '' if include_archived else libraries.archived_library_cond()),
+                    args=[user_id, limit])
+                last_ids = [row['id'] for row in last_rows]
+
+                query = "SELECT session_history.id, session_history.media_type, guid, " \
+                        "session_history.rating_key, session_history.parent_rating_key, session_history.grandparent_rating_key, " \
+                        "title, parent_title, grandparent_title, original_title, " \
+                        "thumb, parent_thumb, grandparent_thumb, media_index, parent_media_index, " \
+                        "year, originally_available_at, added_at, session_history_metadata.live, started, user " \
+                        "FROM session_history_metadata " \
+                        "JOIN session_history ON session_history_metadata.id = session_history.id " \
+                        "WHERE session_history.id IN (%s) " \
+                        "ORDER BY started DESC" % ",".join(["?"] * len(last_ids))
+                result = monitor_db.select(query, args=last_ids) if last_ids else []
             else:
                 result = []
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_recently_watched: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for get_recently_watched: %s." % e)
             result = []
 
         for row in result:
@@ -651,22 +773,26 @@ class Users(object):
 
         return recently_watched
 
-    def get_users(self):
+    def get_users(self, include_deleted=False):
         monitor_db = database.MonitorDatabase()
 
+        where = '' if include_deleted else 'WHERE deleted_user = 0'
+
         try:
-            query = 'SELECT id AS row_id, user_id, username, friendly_name, thumb, custom_avatar_url, email, ' \
-                    'is_active, is_admin, is_home_user, is_allow_sync, is_restricted, ' \
-                    'do_notify, keep_history, allow_guest, server_token, shared_libraries, ' \
-                    'filter_all, filter_movies, filter_tv, filter_music, filter_photos ' \
-                    'FROM users WHERE deleted_user = 0'
+            query = "SELECT id AS row_id, user_id, username, friendly_name, thumb, custom_avatar_url, email, " \
+                    "is_active, is_admin, is_home_user, is_allow_sync, is_restricted, " \
+                    "keep_history, allow_guest, is_archived, shared_libraries, " \
+                    "filter_all, filter_movies, filter_tv, filter_music, filter_photos " \
+                    "FROM users %s" % where
             result = monitor_db.select(query=query)
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_users: %s." % e)
-            return None
+            logger.exception("Tautulli Users :: Unable to execute database query for get_users: %s." % e)
+            return []
 
         users = []
         for item in result:
+            shared_libraries = tuple(item['shared_libraries'].split(';')) if item['shared_libraries'] else ()
+
             user = {'row_id': item['row_id'],
                     'user_id': item['user_id'],
                     'username': item['username'],
@@ -678,11 +804,10 @@ class Users(object):
                     'is_home_user': item['is_home_user'],
                     'is_allow_sync': item['is_allow_sync'],
                     'is_restricted': item['is_restricted'],
-                    'do_notify': item['do_notify'],
                     'keep_history': item['keep_history'],
                     'allow_guest': item['allow_guest'],
-                    'server_token': item['server_token'],
-                    'shared_libraries': item['shared_libraries'],
+                    'is_archived': item['is_archived'],
+                    'shared_libraries': shared_libraries,
                     'filter_all': item['filter_all'],
                     'filter_movies': item['filter_movies'],
                     'filter_tv': item['filter_tv'],
@@ -700,8 +825,8 @@ class Users(object):
             row_ids = list(map(helpers.cast_to_int, row_ids.split(',')))
 
             # Get the user_ids corresponding to the row_ids
-            result = monitor_db.select('SELECT user_id FROM users '
-                                       'WHERE id IN ({})'.format(','.join(['?'] * len(row_ids))), row_ids)
+            result = monitor_db.select("SELECT user_id FROM users "
+                                       "WHERE id IN ({})".format(",".join(["?"] * len(row_ids))), row_ids)
 
             success = []
             for user in result:
@@ -709,7 +834,7 @@ class Users(object):
                                            purge_only=purge_only))
             return all(success)
 
-        elif str(user_id).isdigit():
+        elif user_id is not None and str(user_id).isdigit():
             delete_success = database.delete_user_history(user_id=user_id)
 
             if purge_only:
@@ -718,80 +843,93 @@ class Users(object):
                 logger.info("Tautulli Users :: Deleting user with user_id %s from database."
                             % user_id)
                 try:
-                    monitor_db.action('UPDATE users '
-                                      'SET deleted_user = 1, keep_history = 0, do_notify = 0 '
-                                      'WHERE user_id = ?', [user_id])
+                    monitor_db.action("UPDATE users "
+                                      "SET deleted_user = 1, keep_history = 0, is_archived = 0 "
+                                      "WHERE user_id = ?", [user_id])
+                    self.clear_user_login_token(user_id=user_id)
                     return delete_success
                 except Exception as e:
-                    logger.warn("Tautulli Users :: Unable to execute database query for delete: %s." % e)
+                    logger.exception("Tautulli Users :: Unable to execute database query for delete: %s." % e)
 
         else:
             return False
 
-    def undelete(self, user_id=None, username=None):
+    def undelete(self, user_id=None, username=None, row_ids=None):
         monitor_db = database.MonitorDatabase()
 
         try:
-            if user_id and str(user_id).isdigit():
-                query = 'SELECT * FROM users WHERE user_id = ?'
+            if row_ids:
+                row_ids = list(map(helpers.cast_to_int, row_ids.split(',')))
+
+                # Get the user_ids corresponding to the row_ids
+                result = monitor_db.select("SELECT user_id FROM users "
+                                           "WHERE id IN ({})".format(",".join(["?"] * len(row_ids))), row_ids)
+
+                success = [self.undelete(user_id=user['user_id']) for user in result]
+                return bool(success) and all(success)
+
+            elif user_id is not None and str(user_id).isdigit():
+                query = "SELECT * FROM users WHERE user_id = ?"
                 result = monitor_db.select(query=query, args=[user_id])
                 if result:
-                    logger.info("Tautulli Users :: Re-adding user with id %s to database." % user_id)
-                    monitor_db.action('UPDATE users '
-                                      'SET deleted_user = 0, keep_history = 1, do_notify = 1 '
-                                      'WHERE user_id = ?', [user_id])
+                    logger.info("Tautulli Users :: Restoring user with id %s to database." % user_id)
+                    monitor_db.action("UPDATE users "
+                                      "SET deleted_user = 0, keep_history = 1, is_archived = 0 "
+                                      "WHERE user_id = ?", [user_id])
                     return True
                 else:
                     return False
 
             elif username:
-                query = 'SELECT * FROM users WHERE username = ?'
+                query = "SELECT * FROM users WHERE username = ?"
                 result = monitor_db.select(query=query, args=[username])
                 if result:
-                    logger.info("Tautulli Users :: Re-adding user with username %s to database." % username)
-                    monitor_db.action('UPDATE users '
-                                      'SET deleted_user = 0, keep_history = 1, do_notify = 1 '
-                                      'WHERE username = ?', [username])
+                    logger.info("Tautulli Users :: Restoring user with username %s to database." % username)
+                    monitor_db.action("UPDATE users "
+                                      "SET deleted_user = 0, keep_history = 1, is_archived = 0 "
+                                      "WHERE username = ?", [username])
                     return True
                 else:
                     return False
 
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for undelete: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for undelete: %s." % e)
 
-    # Keep method for PlexWatch/Plexivity import
-    def get_user_id(self, user=None):
-        if user:
-            try:
-                monitor_db = database.MonitorDatabase()
-                query = 'SELECT user_id FROM users WHERE username = ?'
-                result = monitor_db.select_single(query, args=[user])
-                if result:
-                    return result['user_id']
-                else:
-                    return None
-            except:
-                return None
+    def get_archived_user_ids(self):
+        """Return the user_ids of all archived users.
 
-        return None
+        Returns an empty list if the query fails.
+        """
+        monitor_db = database.MonitorDatabase()
 
-    def get_user_names(self, kwargs=None):
+        try:
+            result = monitor_db.select("SELECT user_id FROM users WHERE is_archived = 1")
+        except Exception as e:
+            logger.exception("Tautulli Users :: Unable to execute database query for get_archived_user_ids: %s." % e)
+            return []
+
+        return [item['user_id'] for item in result]
+
+    def get_user_names(self, include_archived=False):
         monitor_db = database.MonitorDatabase()
 
         user_cond = ''
         if session.get_session_user_id():
-            user_cond = 'AND user_id = %s ' % session.get_session_user_id()
+            user_cond = "AND user_id = %s " % session.get_session_user_id()
+
+        if not include_archived:
+            user_cond += "AND is_archived = 0 "
 
         try:
-            query = 'SELECT user_id, ' \
-                    '(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = "" \
-                    THEN users.username ELSE users.friendly_name END) AS friendly_name ' \
-                    'FROM users ' \
-                    'WHERE deleted_user = 0 %s' % user_cond
+            query = "SELECT user_id, is_archived, " \
+                    "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
+                    THEN users.username ELSE users.friendly_name END) AS friendly_name " \
+                    "FROM users " \
+                    "WHERE deleted_user = 0 %s" % user_cond
 
             result = monitor_db.select(query)
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_user_names: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for get_user_names: %s." % e)
             return None
 
         return session.friendly_name_to_username(result)
@@ -803,11 +941,11 @@ class Users(object):
             'server_token': ''
         }
 
-        if user_id:
+        if user_id is not None:
             try:
                 monitor_db = database.MonitorDatabase()
-                query = 'SELECT allow_guest, user_token, server_token FROM users ' \
-                        'WHERE user_id = ? AND deleted_user = 0'
+                query = "SELECT allow_guest, user_token, server_token FROM users " \
+                        "WHERE user_id = ? AND deleted_user = 0"
                 result = monitor_db.select_single(query, args=[user_id])
                 if result:
                     tokens = {'allow_guest': result['allow_guest'],
@@ -817,7 +955,8 @@ class Users(object):
                     return tokens
                 else:
                     return tokens
-            except:
+            except Exception as e:
+                logger.debug("Tautulli Users :: Unable to get tokens for user_id %s: %s.", user_id, e, exc_info=True)
                 return tokens
 
         return tokens
@@ -828,11 +967,11 @@ class Users(object):
 
         try:
             monitor_db = database.MonitorDatabase()
-            query = 'SELECT filter_all, filter_movies, filter_tv, filter_music, filter_photos FROM users ' \
-                    'WHERE user_id = ?'
+            query = "SELECT filter_all, filter_movies, filter_tv, filter_music, filter_photos FROM users " \
+                    "WHERE user_id = ?"
             result = monitor_db.select_single(query, args=[user_id])
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_filters: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for get_filters: %s." % e)
             result = {}
 
         filters_list = {}
@@ -874,70 +1013,83 @@ class Users(object):
             try:
                 monitor_db.upsert(table_name='user_login', key_dict=keys, value_dict=values)
             except Exception as e:
-                logger.warn("Tautulli Users :: Unable to execute database query for set_login_log: %s." % e)
+                logger.exception("Tautulli Users :: Unable to execute database query for set_login_log: %s." % e)
 
     def get_user_login(self, jwt_token):
         monitor_db = database.MonitorDatabase()
-        result = monitor_db.select_single('SELECT * FROM user_login '
-                                          'WHERE jwt_token = ?',
+        result = monitor_db.select_single("SELECT * FROM user_login "
+                                          "WHERE jwt_token = ?",
                                           [jwt_token])
         return result
 
-    def clear_user_login_token(self, jwt_token=None, row_ids=None):
+    def clear_user_login_token(self, jwt_token=None, row_ids=None, user_id=None):
         monitor_db = database.MonitorDatabase()
 
         if jwt_token:
             logger.debug("Tautulli Users :: Clearing user JWT token.")
             try:
-                monitor_db.action('UPDATE user_login SET jwt_token = NULL '
-                                  'WHERE jwt_token = ?',
+                monitor_db.action("UPDATE user_login SET jwt_token = NULL "
+                                  "WHERE jwt_token = ?",
                                   [jwt_token])
+                return True
             except Exception as e:
-                logger.error("Tautulli Users :: Unable to clear user JWT token: %s.", e)
+                logger.exception("Tautulli Users :: Unable to clear user JWT token: %s.", e)
                 return False
 
         elif row_ids and row_ids is not None:
             row_ids = list(map(helpers.cast_to_int, row_ids.split(',')))
             logger.debug("Tautulli Users :: Clearing JWT tokens for row_ids %s.", row_ids)
             try:
-                monitor_db.action('UPDATE user_login SET jwt_token = NULL '
-                                  'WHERE id in ({})'.format(','.join(['?'] * len(row_ids))),
+                monitor_db.action("UPDATE user_login SET jwt_token = NULL "
+                                  "WHERE id in ({})".format(",".join(["?"] * len(row_ids))),
                                   row_ids)
+                return True
             except Exception as e:
-                logger.error("Tautulli Users :: Unable to clear JWT tokens: %s.", e)
+                logger.exception("Tautulli Users :: Unable to clear JWT tokens: %s.", e)
                 return False
 
-        return True
+        elif str(user_id).isdigit():
+            # Log out a guest who was archived or deleted. Admin logins are left alone.
+            logger.debug("Tautulli Users :: Clearing guest JWT tokens for user_id %s.", user_id)
+            try:
+                monitor_db.action("UPDATE user_login SET jwt_token = NULL "
+                                  "WHERE user_id = ? AND user_group = 'guest'",
+                                  [user_id])
+            except Exception as e:
+                logger.exception("Tautulli Users :: Unable to clear JWT tokens: %s.", e)
+                return False
+
+        return False
 
     def get_datatables_user_login(self, user_id=None, jwt_token=None, kwargs=None):
-        default_return = {'recordsFiltered': 0,
-                          'recordsTotal': 0,
-                          'draw': 0,
-                          'data': []}
-
         if not session.allow_session_user(user_id):
-            return default_return
+            return {
+                'recordsFiltered': 0,
+                'recordsTotal': 0,
+                'draw': 0,
+                'data': []
+            }
 
         data_tables = datatables.DataTables()
 
         if session.get_session_user_id():
             custom_where = [['user_login.user_id', session.get_session_user_id()]]
         else:
-            custom_where = [['user_login.user_id', user_id]] if user_id else []
+            custom_where = [['user_login.user_id', user_id]] if user_id is not None else []
 
-        columns = ['user_login.id AS row_id',
-                   'user_login.timestamp',
-                   'user_login.user_id',
-                   'user_login.user',
-                   'user_login.user_group',
-                   'user_login.ip_address',
-                   'user_login.host',
-                   'user_login.user_agent',
-                   'user_login.success',
-                   'user_login.expiry',
-                   'user_login.jwt_token',
-                   '(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = "" \
-                    THEN users.username ELSE users.friendly_name END) AS friendly_name'
+        columns = ["user_login.id AS row_id",
+                   "user_login.timestamp",
+                   "user_login.user_id",
+                   "user_login.user",
+                   "user_login.user_group",
+                   "user_login.ip_address",
+                   "user_login.host",
+                   "user_login.user_agent",
+                   "user_login.success",
+                   "user_login.expiry",
+                   "user_login.jwt_token",
+                   "(CASE WHEN users.friendly_name IS NULL OR TRIM(users.friendly_name) = '' \
+                    THEN users.username ELSE users.friendly_name END) AS friendly_name"
                    ]
 
         try:
@@ -950,8 +1102,8 @@ class Users(object):
                                           join_evals=[['user_login.user_id', 'users.user_id']],
                                           kwargs=kwargs)
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for get_datatables_user_login: %s." % e)
-            return default_return
+            logger.exception("Tautulli Users :: Unable to execute database query for get_datatables_user_login: %s." % e)
+            return
 
         results = query['result']
 
@@ -1001,5 +1153,5 @@ class Users(object):
             monitor_db.action('VACUUM')
             return True
         except Exception as e:
-            logger.warn("Tautulli Users :: Unable to execute database query for delete_login_log: %s." % e)
+            logger.exception("Tautulli Users :: Unable to execute database query for delete_login_log: %s." % e)
             return False

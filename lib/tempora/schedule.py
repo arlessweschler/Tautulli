@@ -1,39 +1,41 @@
-# -*- coding: utf-8 -*-
-
 """
-Classes for calling functions a schedule.
+Classes for calling functions a schedule. Has time zone support.
+
+For example, to run a job at 08:00 every morning in 'Asia/Calcutta':
+
+>>> import zoneinfo
+>>> job = lambda: print("time is now", datetime.datetime())
+>>> time = datetime.time(8, tzinfo=zoneinfo.ZoneInfo('Asia/Calcutta'))
+>>> cmd = PeriodicCommandFixedDelay.daily_at(time, job)
+>>> sched = InvokeScheduler()
+>>> sched.add(cmd)
+>>> while True:  # doctest: +SKIP
+...     sched.run_pending()
+...     time.sleep(.1)
+
+By default, the scheduler uses timezone-aware times in UTC. A
+client may override the default behavior by overriding ``now``
+and ``from_timestamp`` functions.
+
+>>> now()
+datetime.datetime(...utc)
+>>> from_timestamp(1718723533.7685602)
+datetime.datetime(...utc)
 """
 
-from __future__ import absolute_import
+from __future__ import annotations
 
-import datetime
-import numbers
 import abc
 import bisect
+import datetime
+import numbers
+from typing import TYPE_CHECKING, Any
 
-import pytz
+from .utc import fromtimestamp as from_timestamp
+from .utc import now
 
-__metaclass__ = type
-
-
-def now():
-    """
-    Provide the current timezone-aware datetime.
-
-    A client may override this function to change the default behavior,
-    such as to use local time or timezone-naïve times.
-    """
-    return datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
-
-
-def from_timestamp(ts):
-    """
-    Convert a numeric timestamp to a timezone-aware datetime.
-
-    A client may override this function to change the default behavior,
-    such as to use local time or timezone-naïve times.
-    """
-    return datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=pytz.utc)
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 
 class DelayedCommand(datetime.datetime):
@@ -41,16 +43,24 @@ class DelayedCommand(datetime.datetime):
     A command to be executed after some delay (seconds or timedelta).
     """
 
+    delay: datetime.timedelta = datetime.timedelta()
+    target: Any  # Expected type depends on the scheduler used
+
     @classmethod
-    def from_datetime(cls, other):
+    def from_datetime(cls, other) -> Self:
         return cls(
-            other.year, other.month, other.day, other.hour,
-            other.minute, other.second, other.microsecond,
+            other.year,
+            other.month,
+            other.day,
+            other.hour,
+            other.minute,
+            other.second,
+            other.microsecond,
             other.tzinfo,
         )
 
     @classmethod
-    def after(cls, delay, target):
+    def after(cls, delay, target) -> Self:
         if not isinstance(delay, datetime.timedelta):
             delay = datetime.timedelta(seconds=delay)
         due_time = now() + delay
@@ -71,7 +81,7 @@ class DelayedCommand(datetime.datetime):
         return from_timestamp(input)
 
     @classmethod
-    def at_time(cls, at, target):
+    def at_time(cls, at, target) -> Self:
         """
         Construct a DelayedCommand to come due at `at`, where `at` may be
         a datetime or timestamp.
@@ -82,7 +92,7 @@ class DelayedCommand(datetime.datetime):
         cmd.target = target
         return cmd
 
-    def due(self):
+    def due(self) -> bool:
         return now() >= self
 
 
@@ -91,36 +101,23 @@ class PeriodicCommand(DelayedCommand):
     Like a delayed command, but expect this command to run every delay
     seconds.
     """
-    def _next_time(self):
+
+    def _next_time(self) -> Self:
         """
         Add delay to self, localized
         """
-        return self._localize(self + self.delay)
+        return self + self.delay
 
-    @staticmethod
-    def _localize(dt):
-        """
-        Rely on pytz.localize to ensure new result honors DST.
-        """
-        try:
-            tz = dt.tzinfo
-            return tz.localize(dt.replace(tzinfo=None))
-        except AttributeError:
-            return dt
-
-    def next(self):
+    def next(self) -> Self:
         cmd = self.__class__.from_datetime(self._next_time())
         cmd.delay = self.delay
         cmd.target = self.target
         return cmd
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key, value) -> None:
         if key == 'delay' and not value > datetime.timedelta():
-            raise ValueError(
-                "A PeriodicCommand must have a positive, "
-                "non-zero delay."
-            )
-        super(PeriodicCommand, self).__setattr__(key, value)
+            raise ValueError("A PeriodicCommand must have a positive, non-zero delay.")
+        super().__setattr__(key, value)
 
 
 class PeriodicCommandFixedDelay(PeriodicCommand):
@@ -131,26 +128,38 @@ class PeriodicCommandFixedDelay(PeriodicCommand):
     """
 
     @classmethod
-    def at_time(cls, at, delay, target):
+    def at_time(cls, at, delay, target) -> Self:  # type: ignore[override] # jaraco/tempora#39
+        """
+        >>> cmd = PeriodicCommandFixedDelay.at_time(0, 30, None)
+        >>> cmd.delay.total_seconds()
+        30.0
+        """
         at = cls._from_timestamp(at)
         cmd = cls.from_datetime(at)
         if isinstance(delay, numbers.Number):
-            delay = datetime.timedelta(seconds=delay)
+            delay = datetime.timedelta(seconds=delay)  # type: ignore[arg-type] # python/mypy#3186#issuecomment-1571512649
         cmd.delay = delay
         cmd.target = target
         return cmd
 
     @classmethod
-    def daily_at(cls, at, target):
+    def daily_at(cls, at, target) -> Self:
         """
         Schedule a command to run at a specific time each day.
+
+        >>> from tempora import utc
+        >>> noon = utc.time(12, 0)
+        >>> cmd = PeriodicCommandFixedDelay.daily_at(noon, None)
+        >>> cmd.delay.total_seconds()
+        86400.0
         """
         daily = datetime.timedelta(days=1)
         # convert when to the next datetime matching this time
         when = datetime.datetime.combine(datetime.date.today(), at)
-        if when < now():
+        when -= daily
+        while when < now():
             when += daily
-        return cls.at_time(cls._localize(when), daily, target)
+        return cls.at_time(when, daily, target)
 
 
 class Scheduler:
@@ -158,14 +167,14 @@ class Scheduler:
     A rudimentary abstract scheduler accepting DelayedCommands
     and dispatching them on schedule.
     """
-    def __init__(self):
-        self.queue = []
 
-    def add(self, command):
-        assert isinstance(command, DelayedCommand)
+    def __init__(self) -> None:
+        self.queue: list[DelayedCommand] = []
+
+    def add(self, command: DelayedCommand) -> None:
         bisect.insort(self.queue, command)
 
-    def run_pending(self):
+    def run_pending(self) -> None:
         while self.queue:
             command = self.queue[0]
             if not command.due():
@@ -176,7 +185,7 @@ class Scheduler:
             del self.queue[0]
 
     @abc.abstractmethod
-    def run(self, command):
+    def run(self, command: DelayedCommand) -> None:
         """
         Run the command
         """
@@ -186,7 +195,8 @@ class InvokeScheduler(Scheduler):
     """
     Command targets are functions to be invoked on schedule.
     """
-    def run(self, command):
+
+    def run(self, command: DelayedCommand) -> None:
         command.target()
 
 
@@ -194,9 +204,10 @@ class CallbackScheduler(Scheduler):
     """
     Command targets are passed to a dispatch callable on schedule.
     """
-    def __init__(self, dispatch):
-        super(CallbackScheduler, self).__init__()
+
+    def __init__(self, dispatch) -> None:
+        super().__init__()
         self.dispatch = dispatch
 
-    def run(self, command):
+    def run(self, command: DelayedCommand) -> None:
         self.dispatch(command.target)

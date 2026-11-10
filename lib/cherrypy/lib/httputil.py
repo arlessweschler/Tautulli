@@ -10,17 +10,17 @@ to a public caning.
 import functools
 import email.utils
 import re
+import builtins
 from binascii import b2a_base64
-from cgi import parse_header
 from email.header import decode_header
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import unquote_plus
 
-import six
-from six.moves import range, builtins, map
-from six.moves.BaseHTTPServer import BaseHTTPRequestHandler
+import jaraco.collections
 
 import cherrypy
 from cherrypy._cpcompat import ntob, ntou
-from cherrypy._cpcompat import unquote_plus
+from .headers import parse_header
 
 response_codes = BaseHTTPRequestHandler.responses.copy()
 
@@ -71,10 +71,10 @@ def protocol_from_http(protocol_str):
 def get_ranges(headervalue, content_length):
     """Return a list of (start, stop) indices from a Range header, or None.
 
-    Each (start, stop) tuple will be composed of two ints, which are suitable
-    for use in a slicing operation. That is, the header "Range: bytes=3-6",
-    if applied against a Python string, is requesting resource[3:7]. This
-    function will return the list [(3, 7)].
+    Each (start, stop) tuple will be composed of two ints, which are
+    suitable for use in a slicing operation. That is, the header "Range:
+    bytes=3-6", if applied against a Python string, is requesting
+    resource[3:7]. This function will return the list [(3, 7)].
 
     If this function returns an empty list, you should return HTTP 416.
     """
@@ -127,7 +127,6 @@ def get_ranges(headervalue, content_length):
 
 
 class HeaderElement(object):
-
     """An element (with parameters) from an HTTP header's element list."""
 
     def __init__(self, value, params=None):
@@ -143,7 +142,7 @@ class HeaderElement(object):
         return self.value < other.value
 
     def __str__(self):
-        p = [';%s=%s' % (k, v) for k, v in six.iteritems(self.params)]
+        p = [';%s=%s' % (k, v) for k, v in self.params.items()]
         return str('%s%s' % (self.value, ''.join(p)))
 
     def __bytes__(self):
@@ -169,14 +168,14 @@ q_separator = re.compile(r'; *q *=')
 
 
 class AcceptElement(HeaderElement):
-
     """An element (with parameters) from an Accept* header's element list.
 
-    AcceptElement objects are comparable; the more-preferred object will be
-    "less than" the less-preferred object. They are also therefore sortable;
-    if you sort a list of AcceptElement objects, they will be listed in
-    priority order; the most preferred value will be first. Yes, it should
-    have been the other way around, but it's too late to fix now.
+    AcceptElement objects are comparable; the more-preferred object will
+    be "less than" the less-preferred object. They are also therefore
+    sortable; if you sort a list of AcceptElement objects, they will be
+    listed in priority order; the most preferred value will be first.
+    Yes, it should have been the other way around, but it's too late to
+    fix now.
     """
 
     @classmethod
@@ -209,14 +208,11 @@ class AcceptElement(HeaderElement):
 
             Ref: https://github.com/cherrypy/cherrypy/issues/1370
             """
-            six.raise_from(
-                cherrypy.HTTPError(
-                    400,
-                    'Malformed HTTP header: `{}`'.
-                    format(str(self)),
-                ),
-                val_err,
-            )
+            raise cherrypy.HTTPError(
+                400,
+                'Malformed HTTP header: `{}`'.
+                format(str(self)),
+            ) from val_err
 
     def __cmp__(self, other):
         diff = builtins.cmp(self.qvalue, other.qvalue)
@@ -252,8 +248,7 @@ def header_elements(fieldname, fieldvalue):
 
 
 def decode_TEXT(value):
-    r"""
-    Decode :rfc:`2047` TEXT
+    r"""Decode :rfc:`2047` TEXT.
 
     >>> decode_TEXT("=?utf-8?q?f=C3=BCr?=") == b'f\xfcr'.decode('latin-1')
     True
@@ -268,9 +263,7 @@ def decode_TEXT(value):
 
 
 def decode_TEXT_maybe(value):
-    """
-    Decode the text but only if '=?' appears in it.
-    """
+    """Decode the text but only if '=?' appears in it."""
     return decode_TEXT(value) if '=?' in value else value
 
 
@@ -283,11 +276,11 @@ def valid_status(status):
     If status has no reason-phrase is supplied, a default reason-
     phrase will be provided.
 
-    >>> from six.moves import http_client
-    >>> from six.moves.BaseHTTPServer import BaseHTTPRequestHandler
-    >>> valid_status(http_client.ACCEPTED) == (
-    ...     int(http_client.ACCEPTED),
-    ... ) + BaseHTTPRequestHandler.responses[http_client.ACCEPTED]
+    >>> import http.client
+    >>> from http.server import BaseHTTPRequestHandler
+    >>> valid_status(http.client.ACCEPTED) == (
+    ...     int(http.client.ACCEPTED),
+    ... ) + BaseHTTPRequestHandler.responses[http.client.ACCEPTED]
     True
     """
 
@@ -295,7 +288,7 @@ def valid_status(status):
         status = 200
 
     code, reason = status, None
-    if isinstance(status, six.string_types):
+    if isinstance(status, str):
         code, _, reason = status.partition(' ')
         reason = reason.strip() or None
 
@@ -390,77 +383,18 @@ def parse_query_string(query_string, keep_blank_values=True, encoding='utf-8'):
     return pm
 
 
-####
-# Inlined from jaraco.collections 1.5.2
-# Ref #1673
-class KeyTransformingDict(dict):
-    """
-    A dict subclass that transforms the keys before they're used.
-    Subclasses may override the default transform_key to customize behavior.
-    """
-    @staticmethod
-    def transform_key(key):
-        return key
-
-    def __init__(self, *args, **kargs):
-        super(KeyTransformingDict, self).__init__()
-        # build a dictionary using the default constructs
-        d = dict(*args, **kargs)
-        # build this dictionary using transformed keys.
-        for item in d.items():
-            self.__setitem__(*item)
-
-    def __setitem__(self, key, val):
-        key = self.transform_key(key)
-        super(KeyTransformingDict, self).__setitem__(key, val)
-
-    def __getitem__(self, key):
-        key = self.transform_key(key)
-        return super(KeyTransformingDict, self).__getitem__(key)
-
-    def __contains__(self, key):
-        key = self.transform_key(key)
-        return super(KeyTransformingDict, self).__contains__(key)
-
-    def __delitem__(self, key):
-        key = self.transform_key(key)
-        return super(KeyTransformingDict, self).__delitem__(key)
-
-    def get(self, key, *args, **kwargs):
-        key = self.transform_key(key)
-        return super(KeyTransformingDict, self).get(key, *args, **kwargs)
-
-    def setdefault(self, key, *args, **kwargs):
-        key = self.transform_key(key)
-        return super(KeyTransformingDict, self).setdefault(
-            key, *args, **kwargs)
-
-    def pop(self, key, *args, **kwargs):
-        key = self.transform_key(key)
-        return super(KeyTransformingDict, self).pop(key, *args, **kwargs)
-
-    def matching_key_for(self, key):
-        """
-        Given a key, return the actual key stored in self that matches.
-        Raise KeyError if the key isn't found.
-        """
-        try:
-            return next(e_key for e_key in self.keys() if e_key == key)
-        except StopIteration:
-            raise KeyError(key)
-####
-
-
-class CaseInsensitiveDict(KeyTransformingDict):
-
+class CaseInsensitiveDict(jaraco.collections.KeyTransformingDict):
     """A case-insensitive dict subclass.
 
-    Each key is changed on entry to str(key).title().
+    Each key is changed on entry to title case.
     """
 
     @staticmethod
     def transform_key(key):
-        return str(key).title()
+        if key is None:
+            # TODO(#1830): why?
+            return 'None'
+        return key.title()
 
 
 #   TEXT = <any OCTET except CTLs, but including LWS>
@@ -478,7 +412,6 @@ else:
 
 
 class HeaderMap(CaseInsensitiveDict):
-
     """A dict subclass for HTTP request and response headers.
 
     Each key is changed on entry to str(key).title(). This allows headers
@@ -499,9 +432,7 @@ class HeaderMap(CaseInsensitiveDict):
 
     def elements(self, key):
         """Return a sorted list of HeaderElements for the given header."""
-        key = str(key).title()
-        value = self.get(key)
-        return header_elements(key, value)
+        return header_elements(self.transform_key(key), self.get(key))
 
     def values(self, key):
         """Return a sorted list of HeaderElement.value for the given header."""
@@ -518,15 +449,14 @@ class HeaderMap(CaseInsensitiveDict):
         transmitting on the wire for HTTP.
         """
         for k, v in header_items:
-            if not isinstance(v, six.string_types) and \
-                    not isinstance(v, six.binary_type):
-                v = six.text_type(v)
+            if not isinstance(v, str) and not isinstance(v, bytes):
+                v = str(v)
 
             yield tuple(map(cls.encode_header_item, (k, v)))
 
     @classmethod
     def encode_header_item(cls, item):
-        if isinstance(item, six.text_type):
+        if isinstance(item, str):
             item = cls.encode(item)
 
         # See header_translate_* constants above.
@@ -558,7 +488,6 @@ class HeaderMap(CaseInsensitiveDict):
 
 
 class Host(object):
-
     """An internet address.
 
     name
@@ -580,3 +509,33 @@ class Host(object):
 
     def __repr__(self):
         return 'httputil.Host(%r, %r, %r)' % (self.ip, self.port, self.name)
+
+
+class SanitizedHost(str):
+    r"""
+    Wraps a raw host header received from the network in
+    a sanitized version that elides dangerous characters.
+
+    >>> SanitizedHost('foo\nbar')
+    'foobar'
+    >>> SanitizedHost('foo\nbar').raw
+    'foo\nbar'
+
+    A SanitizedInstance is only returned if sanitization was performed.
+
+    >>> isinstance(SanitizedHost('foobar'), SanitizedHost)
+    False
+    """
+    dangerous = re.compile(r'[\n\r]')
+
+    def __new__(cls, raw):
+        sanitized = cls._sanitize(raw)
+        if sanitized == raw:
+            return raw
+        instance = super().__new__(cls, sanitized)
+        instance.raw = raw
+        return instance
+
+    @classmethod
+    def _sanitize(cls, raw):
+        return cls.dangerous.sub('', raw)

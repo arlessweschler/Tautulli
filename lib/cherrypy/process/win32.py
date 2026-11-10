@@ -1,4 +1,7 @@
-"""Windows service. Requires pywin32."""
+"""Windows service.
+
+Requires pywin32.
+"""
 
 import os
 import win32api
@@ -11,7 +14,6 @@ from cherrypy.process import wspbus, plugins
 
 
 class ConsoleCtrlHandler(plugins.SimplePlugin):
-
     """A WSPBus plugin for handling Win32 console events (like Ctrl-C)."""
 
     def __init__(self, bus):
@@ -20,7 +22,7 @@ class ConsoleCtrlHandler(plugins.SimplePlugin):
 
     def start(self):
         if self.is_set:
-            self.bus.log('Handler for console events already set.', level=40)
+            self.bus.log('Handler for console events already set.', level=20)
             return
 
         result = win32api.SetConsoleCtrlHandler(self.handle, 1)
@@ -28,12 +30,12 @@ class ConsoleCtrlHandler(plugins.SimplePlugin):
             self.bus.log('Could not SetConsoleCtrlHandler (error %r)' %
                          win32api.GetLastError(), level=40)
         else:
-            self.bus.log('Set handler for console events.', level=40)
+            self.bus.log('Set handler for console events.', level=20)
             self.is_set = True
 
     def stop(self):
         if not self.is_set:
-            self.bus.log('Handler for console events already off.', level=40)
+            self.bus.log('Handler for console events already off.', level=20)
             return
 
         try:
@@ -46,7 +48,7 @@ class ConsoleCtrlHandler(plugins.SimplePlugin):
             self.bus.log('Could not remove SetConsoleCtrlHandler (error %r)' %
                          win32api.GetLastError(), level=40)
         else:
-            self.bus.log('Removed handler for console events.', level=40)
+            self.bus.log('Removed handler for console events.', level=20)
             self.is_set = False
 
     def handle(self, event):
@@ -69,10 +71,10 @@ class ConsoleCtrlHandler(plugins.SimplePlugin):
 
 
 class Win32Bus(wspbus.Bus):
-
     """A Web Site Process Bus implementation for Win32.
 
-    Instead of time.sleep, this bus blocks using native win32event objects.
+    Instead of time.sleep, this bus blocks using native win32event
+    objects.
     """
 
     def __init__(self):
@@ -120,7 +122,6 @@ class Win32Bus(wspbus.Bus):
 
 
 class _ControlCodes(dict):
-
     """Control codes used to "signal" a service via ControlService.
 
     User-defined control codes are in the range 128-255. We generally use
@@ -152,7 +153,6 @@ def signal_child(service, command):
 
 
 class PyWebService(win32serviceutil.ServiceFramework):
-
     """Python Web Service."""
 
     _svc_name_ = 'Python Web Service'

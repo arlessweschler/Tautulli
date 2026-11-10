@@ -2,7 +2,7 @@
 <%
     import json
     from plexpy import notifiers, users
-    from plexpy.helpers import checked
+    from plexpy.helpers import checked, json_dumps_for_html
     available_notification_actions = notifiers.available_notification_actions(agent_id=notifier['agent_id'])
 
     user_emails = [{'user': u['friendly_name'] or u['username'], 'email': u['email']} for u in users.Users().get_users() if u['email']]
@@ -12,7 +12,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <button type="button" class="close" data-dismiss="modal" aria-hidden="true"><i class="fa fa-remove"></i></button>
-            <h4 class="modal-title" id="notifier-config-modal-header">${notifier['agent_label']} Settings &nbsp;<small><span class="notifier_id">(Notifier ID: ${notifier['id']})</span></small></h4>
+            <h4 class="modal-title" id="notifier-config-modal-header">${notifier['agent_label']} Settings &nbsp;<small><span class="notifier_id">(Notifier ID: ${notifier['id']}${' - ' + notifier['friendly_name'] if notifier['friendly_name'] else ''})</span></small></h4>
         </div>
         <div class="modal-body">
             <div class="container-fluid">
@@ -51,13 +51,13 @@
                                             <div class="col-md-12">
                                                 % if notifier['agent_name'] == 'scripts' and item['name'] == 'scripts_script_folder':
                                                 <div class="input-group">
-                                                    <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" ${'readonly' if item.get('readonly') else ''}>
+                                                    <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off" ${'readonly' if item.get('readonly') else ''}>
                                                     <span class="input-group-btn">
                                                         <button class="btn btn-form" type="button" id="${item['name']}_browse" data-toggle="browse" data-filter=".folderonly" data-target="#${item['name']}">Browse</button>
                                                     </span>
                                                 </div>
                                                 % else:
-                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" ${'readonly' if item.get('readonly') else ''}>
+                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off" ${'readonly' if item.get('readonly') else ''}>
                                                 % endif
                                             </div>
                                         </div>
@@ -72,7 +72,7 @@
                                                     <span class="input-group-btn">
                                                         <button class="btn btn-form reveal-token" type="button"><i class="fa fa-eye-slash"></i></button>
                                                     </span>
-                                                    <input type="password" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" ${'readonly' if item.get('readonly') else ''}>
+                                                    <input type="password" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off" ${'readonly' if item.get('readonly') else ''}>
                                                 </div>
                                             </div>
                                         </div>
@@ -83,7 +83,7 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-3">
-                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30">
+                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">${item['description'] | n}</p>
@@ -101,7 +101,7 @@
                                     % elif item['input_type'] == 'checkbox':
                                     <div class="checkbox">
                                         <label>
-                                            <input type="checkbox" data-id="${item['name']}" class="checkboxes" value="1" ${checked(item['value'])}> ${item['label']}
+                                            <input type="checkbox" data-id="${item['name']}" class="checkboxes" value="1" autocomplete="off" ${checked(item['value'])}> ${item['label']}
                                         </label>
                                         <p class="help-block">${item['description'] | n}</p>
                                         <input type="hidden" id="${item['name']}" name="${item['name']}" value="${item['value']}">
@@ -111,12 +111,16 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="${item['name']}" name="${item['name']}">
+                                                <select class="form-control" id="${item['name']}" name="${item['name']}" autocomplete="off">
                                                     % for key, value in sorted(item['select_options'].items()):
-                                                    % if key == item['value']:
-                                                    <option value="${key}" selected>${value}</option>
+                                                    % if isinstance(value, list):
+                                                    <optgroup label="${key}">
+                                                        % for option in sorted(value, key=lambda x: x['text'].lower()):
+                                                            <option value="${option['value']}" ${'selected' if option['value'] == item['value'] else ''}>${option['text']}</option>
+                                                        % endfor
+                                                    </optgroup>
                                                     % else:
-                                                    <option value="${key}">${value}</option>
+                                                    <option value="${key}" ${'selected' if key == item['value'] else ''}>${value}</option>
                                                     % endif
                                                     % endfor
                                                 </select>
@@ -129,9 +133,11 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="${item['name']}" name="${item['name']}">
+                                                <select class="form-control" id="${item['name']}" name="${item['name']}" autocomplete="off">
+                                                    % if item['select_all']:
                                                     <option value="select-all">Select All</option>
                                                     <option value="remove-all">Remove All</option>
+                                                    % endif
                                                     % if isinstance(item['select_options'], dict):
                                                     % for section, options in item['select_options'].items():
                                                     <optgroup label="${section}">
@@ -141,7 +147,9 @@
                                                     </optgroup>
                                                     % endfor
                                                     % else:
+                                                    % if item['select_all']:
                                                     <option value="border-all"></option>
+                                                    % endif
                                                     % for option in sorted(item['select_options'], key=lambda x: x['text'].lower()):
                                                         <option value="${option['value']}">${option['text']}</option>
                                                     % endfor
@@ -159,7 +167,7 @@
                                         <label for="friendly_name">Description</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <input type="text" class="form-control" id="friendly_name" name="friendly_name" value="${notifier['friendly_name']}" size="30">
+                                                <input type="text" class="form-control" id="friendly_name" name="friendly_name" value="${notifier['friendly_name']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">Optional: Enter a description to help identify this agent in the notification agents list.</p>
@@ -177,7 +185,7 @@
                                     % for action in available_notification_actions:
                                     <div class="checkbox">
                                         <label>
-                                            <input type="checkbox" data-id="${action['name']}" class="checkboxes" value="1" ${checked(notifier['actions'][action['name']])}> ${action['label']}
+                                            <input type="checkbox" data-id="${action['name']}" class="checkboxes" value="1" autocomplete="off" ${checked(notifier['actions'][action['name']])}> ${action['label']}
                                         </label>
                                         <p class="help-block">${action['description'] | n}</p>
                                         <input type="hidden" id="${action['name']}" name="${action['name']}" value="${notifier['actions'][action['name']]}">
@@ -192,12 +200,15 @@
                                 Add custom conditions to only <em>allow certain notifications</em>. By default, all notifications will be sent if there are no conditions.
                                 <a href="#notify-text-sub-modal" data-toggle="modal">Click here</a> for a description of all the parameters.
                             </p>
+                            <p class="help-block">
+                                A tilde (<span class="inline-pre">~</span>) can be entered as a value to indicate an empty string.
+                            </p>
                             <div id="condition-widget"></div>
                             <input type="hidden" id="custom_conditions" name="custom_conditions" />
 
                             <div class="form-group">
                                 <label for="custom_conditions_logic">Condition Logic</label>
-                                <input type="text" class="form-control" name="custom_conditions_logic" id="custom_conditions_logic" value="${notifier['custom_conditions_logic']}" />
+                                <input type="text" class="form-control" name="custom_conditions_logic" id="custom_conditions_logic" value="${notifier['custom_conditions_logic']}" autocomplete="off" />
                                 <div id="custom_conditions_logic_error" class="alert alert-danger" role="alert" style="padding-top: 5px; padding-bottom: 5px; margin: 0; display: none;"><i class="fa fa-exclamation-triangle" style="color: #a94442;"></i> <span></span></div>
                                 <p class="help-block">
                                     Optional: Enter custom logic to use when evaluating the conditions (e.g. <span class="inline-pre">{1} and ({2} or {3})</span>).
@@ -243,7 +254,7 @@
                                         <li>
                                             <div class="form-group">
                                                 <label for="${action['name']}_subject">Script Arguments</label>
-                                                <input class="form-control" type="text" id="${action['name']}_subject" name="${action['name']}_subject" value="${notifier['notify_text'][action['name']]['subject']}" data-parsley-trigger="change" required>
+                                                <input class="form-control" type="text" id="${action['name']}_subject" name="${action['name']}_subject" value="${notifier['notify_text'][action['name']]['subject']}" autocomplete="off" data-parsley-trigger="change" required>
                                                 <p class="help-block">Set custom arguments passed to the script.</p>
                                             </div>
                                             <div class="form-group">
@@ -269,12 +280,12 @@
                                         <li>
                                             <div class="form-group">
                                                 <label for="${action['name']}_subject">JSON Headers</label>
-                                                <textarea class="form-control" id="${action['name']}_subject" name="${action['name']}_subject" data-parsley-trigger="change" data-autoresize required>${notifier['notify_text'][action['name']]['subject']}</textarea>
+                                                <textarea class="form-control" id="${action['name']}_subject" name="${action['name']}_subject" data-parsley-trigger="change" autocomplete="off" data-autoresize required>${notifier['notify_text'][action['name']]['subject']}</textarea>
                                                 <p class="help-block">Set custom JSON headers.</p>
                                             </div>
                                             <div class="form-group">
                                                 <label for="${action['name']}_body">JSON Data</label>
-                                                <textarea class="form-control" id="${action['name']}_body" name="${action['name']}_body" data-parsley-trigger="change" data-autoresize required>${notifier['notify_text'][action['name']]['body']}</textarea>
+                                                <textarea class="form-control" id="${action['name']}_body" name="${action['name']}_body" data-parsley-trigger="change" autocomplete="off" data-autoresize required>${notifier['notify_text'][action['name']]['body']}</textarea>
                                                 <p class="help-block">Set custom JSON data.</p>
                                             </div>
                                             <div class="form-group">
@@ -300,12 +311,12 @@
                                         <li>
                                             <div class="form-group">
                                                 <label for="${action['name']}_subject">Subject Line</label>
-                                                <input class="form-control" type="text" id="${action['name']}_subject" name="${action['name']}_subject" value="${notifier['notify_text'][action['name']]['subject']}" data-parsley-trigger="change" required>
+                                                <input class="form-control" type="text" id="${action['name']}_subject" name="${action['name']}_subject" value="${notifier['notify_text'][action['name']]['subject']}" autocomplete="off" data-parsley-trigger="change" required>
                                                 <p class="help-block">Set a custom subject line.</p>
                                             </div>
                                             <div class="form-group">
                                                 <label for="${action['name']}_body">Message Body</label>
-                                                <textarea class="form-control" id="${action['name']}_body" name="${action['name']}_body" data-parsley-trigger="change" data-autoresize required>${notifier['notify_text'][action['name']]['body']}</textarea>
+                                                <textarea class="form-control" id="${action['name']}_body" name="${action['name']}_body" data-parsley-trigger="change" autocomplete="off" data-autoresize required>${notifier['notify_text'][action['name']]['body']}</textarea>
                                                 <p class="help-block">Set a custom body.</p>
                                             </div>
                                             <div class="form-group">
@@ -336,7 +347,7 @@
                                 <label for="test_script">Script</label>
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <select class="form-control" id="test_script" name="test_script">
+                                        <select class="form-control" id="test_script" name="test_script" autocomplete="off">
                                             % for key, value in sorted(notifier['config_options'][2]['select_options'].items()):
                                             <option value="${key}">${value}</option>
                                             % endfor
@@ -349,7 +360,7 @@
                                 <label for="test_script_args">Script Arguments</label>
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <input class="form-control" type="text" id="test_script_args" name="test_script_args" value="">
+                                        <input class="form-control" type="text" id="test_script_args" name="test_script_args" value="" autocomplete="off">
                                     </div>
                                 </div>
                                 <p class="help-block">Set custom arguments passed to the script.</p>
@@ -359,7 +370,7 @@
                                 <label for="test_subject">JSON Headers</label>
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <textarea class="form-control" id="test_subject" name="test_subject" data-autoresize></textarea>
+                                        <textarea class="form-control" id="test_subject" name="test_subject" autocomplete="off" data-autoresize></textarea>
                                     </div>
                                 </div>
                                 <p class="help-block">Set custom JSON headers sent to the webhook.</p>
@@ -368,7 +379,7 @@
                                 <label for="test_body">JSON Data</label>
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <textarea class="form-control" id="test_body" name="test_body" data-autoresize></textarea>
+                                        <textarea class="form-control" id="test_body" name="test_body" autocomplete="off" data-autoresize></textarea>
                                     </div>
                                 </div>
                                 <p class="help-block">Set custom JSON data sent to the webhook.</p>
@@ -378,7 +389,7 @@
                                 <label for="test_subject">Subject Line</label>
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <input class="form-control" type="text" id="test_subject" name="test_subject" value="Tautulli">
+                                        <input class="form-control" type="text" id="test_subject" name="test_subject" value="Tautulli" autocomplete="off">
                                     </div>
                                 </div>
                                 <p class="help-block">Set a custom subject line.</p>
@@ -387,7 +398,7 @@
                                 <label for="test_body">Message Body</label>
                                 <div class="row">
                                     <div class="col-md-12">
-                                        <textarea class="form-control" id="test_body" name="test_body" data-autoresize>Test Notification</textarea>
+                                        <textarea class="form-control" id="test_body" name="test_body" autocomplete="off" data-autoresize>Test Notification</textarea>
                                     </div>
                                 </div>
                                 <p class="help-block">Set a custom body.</p>
@@ -414,16 +425,17 @@
 </div>
 
 <script src="${http_root}js/filterer.jquery.js"></script>
+<script src="${http_root}js/ace/ace.js"></script>
 <script>
 
     $('#notifier-config-modal').unbind('hidden.bs.modal');
 
     // Need this for setting conditions since conditions contain the character "
-    $('#custom_conditions').val(JSON.stringify(${json.dumps(notifier["custom_conditions"]) | n}));
+    $('#custom_conditions').val(JSON.stringify(${json_dumps_for_html(notifier["custom_conditions"]) | n}));
 
     $('#condition-widget').filterer({
-        parameters: ${json.dumps(parameters) | n},
-        conditions: ${json.dumps(notifier["custom_conditions"]) | n},
+        parameters: ${json_dumps_for_html(parameters) | n},
+        conditions: ${json_dumps_for_html(notifier["custom_conditions"]) | n},
         updateConditions: function(newConditions){
             $('#custom_conditions').val(JSON.stringify(newConditions));
         }
@@ -496,6 +508,9 @@
 
     $('#duplicate-notifier-item').click(function() {
         var msg = 'Are you sure you want to duplicate this <strong>${notifier["agent_label"]}</strong> notification agent?';
+        if ($('#set_notifier_config .form-control[id$=_password]').val()) {
+            msg += '<br><br>Note: Saved passwords will not be copied over and must be re-entered.';
+        }
         var url = 'add_notifier_config';
         confirmAjaxCall(url, msg, { agent_id: '${notifier["agent_id"]}' }, null, duplicateCallback);
     });
@@ -537,6 +552,7 @@
         var facebook_token;
         $.ajax({
             url: 'facebook_auth',
+            type: 'POST',
             data: {
                 app_id: $('#facebook_app_id').val(),
                 app_secret: $('#facebook_app_secret').val(),
@@ -596,7 +612,7 @@
     % elif notifier['agent_name'] == 'osx':
     $('#osx_notify_register').click(function () {
         var osx_notify_app = $('#osx_notify_app').val();
-        $.get('osxnotifyregister', { 'app': osx_notify_app }, function (data) { showMsg('<i class="fa fa-check"></i> ' + data, false, true, 3000); });
+        $.post('osxnotifyregister', { 'app': osx_notify_app }, function (data) { showMsg('<i class="fa fa-check"></i> ' + data, false, true, 3000); });
     });
 
     % elif notifier['agent_name'] == 'email':
@@ -640,6 +656,11 @@
         createFilter: function(input) {
             var match, regex;
 
+            // allow undisclosed-recipients:; input (only in "To" field)
+            if (input === 'undisclosed-recipients:;' && this.$input.attr('id') === 'email_to') {
+                return !this.options.hasOwnProperty(input);
+            }
+
             // email@address.com
             regex = new RegExp('^' + REGEX_EMAIL + '$', 'i');
             match = input.match(regex);
@@ -653,6 +674,10 @@
             return false;
         },
         create: function(input) {
+            // undisclosed-recipients:; allowed (only in "To" field)
+            if (input === 'undisclosed-recipients:;' && this.$input.attr('id') === 'email_to') {
+                return {value: input};
+            }
             if ((new RegExp('^' + REGEX_EMAIL + '$', 'i')).test(input)) {
                 return {value: input};
             }
@@ -669,9 +694,9 @@
     var email_to = $email_selectors[0].selectize;
     var email_cc = $email_selectors[1].selectize;
     var email_bcc = $email_selectors[2].selectize;
-    email_to.setValue(${json.dumps(next((c['value'] for c in notifier['config_options'] if c['name'] == 'email_to'), [])) | n});
-    email_cc.setValue(${json.dumps(next((c['value'] for c in notifier['config_options'] if c['name'] == 'email_cc'), [])) | n});
-    email_bcc.setValue(${json.dumps(next((c['value'] for c in notifier['config_options'] if c['name'] == 'email_bcc'), [])) | n});
+    email_to.setValue(${json_dumps_for_html(next((c['value'] for c in notifier['config_options'] if c['name'] == 'email_to'), [])) | n});
+    email_cc.setValue(${json_dumps_for_html(next((c['value'] for c in notifier['config_options'] if c['name'] == 'email_cc'), [])) | n});
+    email_bcc.setValue(${json_dumps_for_html(next((c['value'] for c in notifier['config_options'] if c['name'] == 'email_bcc'), [])) | n});
 
     % elif notifier['agent_name'] == 'join':
     var $join_device_names = $('#join_device_names').selectize({
@@ -680,11 +705,11 @@
         create: true
     });
     var join_device_names = $join_device_names[0].selectize;
-    join_device_names.setValue(${json.dumps(next((c['value'] for c in notifier['config_options'] if c['name'] == 'join_device_names'), [])) | n});
+    join_device_names.setValue(${json_dumps_for_html(next((c['value'] for c in notifier['config_options'] if c['name'] == 'join_device_names'), [])) | n});
 
     % elif notifier['agent_name'] == 'zapier':
     $('#zapier_test_hook').click(function () {
-        $.get('zapier_test_hook', { 'zapier_hook': $('#zapier_hook').val() }, function (data) {
+        $.post('zapier_test_hook', { 'zapier_hook': $('#zapier_hook').val() }, function (data) {
             if (data.result === 'success') {
                 showMsg('<i class="fa fa-check"></i> ' + data.msg, false, true, 5000);
             } else {
@@ -708,6 +733,12 @@
     $('#pushover_priority').change( function () {
         pushoverPriority();
     });
+    
+    var $pushover_sound = $('#pushover_sound').selectize({
+        create: true
+    });
+    var pushover_sound = $pushover_sound[0].selectize;
+    pushover_sound.setValue(${json_dumps_for_html(next((c['value'] for c in notifier['config_options'] if c['name'] == 'pushover_sound'), [])) | n});
 
     % elif notifier['agent_name'] == 'plexmobileapp':
     var $plexmobileapp_user_ids = $('#plexmobileapp_user_ids').selectize({
@@ -716,7 +747,7 @@
         create: true
     });
     var plexmobileapp_user_ids = $plexmobileapp_user_ids[0].selectize;
-    plexmobileapp_user_ids.setValue(${json.dumps(next((c['value'] for c in notifier['config_options'] if c['name'] == 'plexmobileapp_user_ids'), [])) | n});
+    plexmobileapp_user_ids.setValue(${json_dumps_for_html(next((c['value'] for c in notifier['config_options'] if c['name'] == 'plexmobileapp_user_ids'), [])) | n});
 
     % endif
 
@@ -853,6 +884,7 @@
         if ('${notifier["agent_name"]}' !== 'browser') {
             $.ajax({
                 url: 'send_notification',
+                type: 'POST',
                 data: {
                     notifier_id: $('#notifier_id').val(),
                     subject: $('#test_subject').val(),
@@ -911,6 +943,37 @@
             modal_body.scrollTop(modal_offset);
         };
         $(this).on('focus keyup input', function () { resizeTextarea(this); }).removeAttr('data-autoresize');
+    });
+
+    // Replace text boxes with Ace editors. The hidden textarea keeps the value that the form saves.
+    function addAceEditors(textareas) {
+        if (!window.ace) return;
+        textareas.each(function () {
+            var textarea = $(this).hide();
+            var container = $('<div class="editor-container"><div class="editor-controls">' +
+                '<button type="button" class="btn btn-dark btn-edit editor-control-btn" title="Toggle Word Wrap"><i class="fa fa-arrows-h"></i></button> ' +
+                '<button type="button" class="btn btn-dark btn-edit editor-control-btn" title="Toggle Gutter"><i class="fa fa-list-ol"></i></button>' +
+                '</div><div></div></div>').insertBefore(textarea);
+            var editor = ace.edit(container.children().last()[0]);
+            editor.setTheme('ace/theme/tautulli');
+            editor.setOptions({
+                showPrintMargin: false, fontSize: '14px', wrap: true, minLines: 3, maxLines: 15,
+                enableKeyboardAccessibility: true
+            });
+            editor.session.setValue(textarea.val());
+            editor.on('change', function () { textarea.val(editor.getValue()); });
+            var buttons = container.find('button');
+            buttons.eq(0).click(function () { editor.session.setUseWrapMode(!editor.session.getUseWrapMode()); });
+            buttons.eq(1).click(function () { editor.renderer.setShowGutter(!editor.renderer.getShowGutter()); });
+        });
+    }
+
+    // The editors appear when a trigger section or the test tab first opens.
+    $('#accordion-notify_text .link').one('click', function () {
+        addAceEditors($(this).next('.submenu').find('textarea'));
+    });
+    $('a[href="#tabs-test_notifications"]').one('shown.bs.tab', function () {
+        addAceEditors($('#tabs-test_notifications textarea'));
     });
 
     toggleRevealTokens();

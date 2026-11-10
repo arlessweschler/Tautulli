@@ -8,7 +8,7 @@ Tries to
     * assist python web apps to detect clients.
 """
 
-__version__ = '1.7.8'
+__version__ = '1.9.9'
 
 
 class DetectorsHub(dict):
@@ -31,7 +31,7 @@ class DetectorsHub(dict):
         return iter(self._known_types)
 
     def registerDetectors(self):
-        detectors = [v() for v in globals().values() if DetectorBase in getattr(v, '__mro__', [])]
+        detectors = [v() for v in list(globals().values()) if DetectorBase in getattr(v, '__mro__', [])]
         for d in detectors:
             if d.can_register:
                 self.register(d)
@@ -56,6 +56,16 @@ class DetectorBase(object):
             self.name = self.__class__.__name__
         self.can_register = (self.__class__.__dict__.get('can_register', True))
 
+        if isinstance(self.look_for, (tuple, list)):
+            self._look_for = self.look_for
+        else:
+            self._look_for = (self.look_for,)
+
+        if isinstance(self.version_markers[0], (list, tuple)):
+            self._version_markers = self.version_markers
+        else:
+            self._version_markers = [self.version_markers]
+
     def detect(self, agent, result):
         # -> True/None
         word = self.checkWords(agent)
@@ -74,21 +84,16 @@ class DetectorBase(object):
         for w in self.skip_if_found:
             if w in agent:
                 return False
-        if isinstance(self.look_for, (tuple, list)):
-            for word in self.look_for:
-                if word in agent:
-                    return word
-        elif self.look_for in agent:
-            return self.look_for
+        for word in self._look_for:
+            if word in agent:
+                return word
 
     def getVersion(self, agent, word):
         """
         => version string /None
         """
-        version_markers = self.version_markers if \
-            isinstance(self.version_markers[0], (list, tuple)) else [self.version_markers]
         version_part = agent.split(word, 1)[-1]
-        for start, end in version_markers:
+        for start, end in self._version_markers:
             if version_part.startswith(start) and end in version_part:
                 version = version_part[1:]
                 if end:  # end could be empty string
@@ -123,17 +128,6 @@ class Browser(DetectorBase):
     can_register = False
 
 
-class Firefox(Browser):
-    look_for = "Firefox"
-    version_markers = [('/', '')]
-    skip_if_found = ["SeaMonkey", "web/snippet"]
-
-
-class SeaMonkey(Browser):
-    look_for = "SeaMonkey"
-    version_markers = [('/', '')]
-
-
 class Konqueror(Browser):
     look_for = "Konqueror"
     version_markers = ["/", ";"]
@@ -154,6 +148,7 @@ class OperaMobile(Browser):
 
 class Opera(Browser):
     look_for = "Opera"
+    skip_if_found = ['Opera Mobi']
 
     def getVersion(self, agent, word):
         try:
@@ -171,6 +166,7 @@ class OperaNew(Browser):
     """
     name = "Opera"
     look_for = "OPR"
+    skip_if_found = ["Build/OPR"]
     version_markers = [('/', '')]
 
 
@@ -206,6 +202,14 @@ class MSEdge(Browser):
     skip_if_found = ["MSIE"]
     version_markers = ["/", ""]
 
+class ChromiumEdge(Browser):
+    look_for = "Edg/"
+
+    def getVersion(self, agent, word):
+        if "Edg/" in agent:
+            return agent.split('Edg/')[-1].strip()
+
+
 class Galeon(Browser):
     look_for = "Galeon"
 
@@ -219,10 +223,10 @@ class WOSBrowser(Browser):
 
 class Safari(Browser):
     look_for = "Safari"
-    skip_if_found = ["Edge"]
+    skip_if_found = ["Edge", "YaBrowser", "FxiOS"]
 
     def checkWords(self, agent):
-        unless_list = ["Chrome", "OmniWeb", "wOSBrowser", "Android"]
+        unless_list = ["Chrome", "OmniWeb", "wOSBrowser", "Android", "CriOS"]
         if self.look_for in agent:
             for word in unless_list:
                 if word in agent:
@@ -249,7 +253,7 @@ class GoogleFeedFetcher(Browser):
     look_for = "Feedfetcher-Google"
     bot = True
 
-    def get_version(self, agent):
+    def getVersion(self, agent, word):
         pass
 
 class RunscopeRadar(Browser):
@@ -260,18 +264,22 @@ class GoogleAppEngine(Browser):
     look_for = "AppEngine-Google"
     bot = True
 
-    def get_version(self, agent):
+    def getVersion(self, agent, word):
         pass
 
 class GoogleApps(Browser):
     look_for = "GoogleApps script"
     bot = True
 
-    def get_version(self, agent):
+    def getVersion(self, agent, word):
         pass
 
 class TwitterBot(Browser):
     look_for = "Twitterbot"
+    bot = True
+
+class TelegramBot(Browser):
+    look_for = "TelegramBot"
     bot = True
 
 class MJ12Bot(Browser):
@@ -397,11 +405,22 @@ class NintendoBrowser(Browser):
 
 class AndroidBrowser(Browser):
     look_for = "Android"
-    skip_if_found = ['Chrome', 'Windows Phone']
+    skip_if_found = ['Chrome', 'Windows Phone', 'Opera', 'Firefox']
 
     # http://decadecity.net/blog/2013/11/21/android-browser-versions
     def getVersion(self, agent, word):
         pass
+
+
+class Firefox(Browser):
+    look_for = ["Firefox", "FxiOS"]
+    version_markers = [('/', '')]
+    skip_if_found = ["SeaMonkey", "web/snippet"]
+
+
+class SeaMonkey(Browser):
+    look_for = "SeaMonkey"
+    version_markers = [('/', '')]
 
 
 class Linux(OS):
@@ -534,19 +553,29 @@ class Debian(Dist):
     look_for = 'Debian'
     version_markers = ["/", " "]
 
-
 class Chrome(Browser):
     look_for = "Chrome"
     version_markers = ["/", " "]
-    skip_if_found = ["OPR", "Edge"]
+    skip_if_found = [" OPR", "Edge", "YaBrowser", "Edg/"]
 
     def getVersion(self, agent, word):
         part = agent.split(word + self.version_markers[0])[-1]
         version = part.split(self.version_markers[1])[0]
         if '+' in version:
-            version = part.split('+')[0]
+            version = version.split('+')[0]
         return version.strip()
 
+class YaBrowser(Browser):
+    look_for = "YaBrowser"
+    name = "Yandex.Browser"
+    version_markers = ["/", " "]
+
+    def getVersion(self, agent, word):
+        part = agent.split(word + self.version_markers[0])[-1]
+        version = part.split(self.version_markers[1])[0]
+        if '+' in version:
+            version = version.split('+')[0]
+        return version.strip()
 
 class ChromeiOS(Browser):
     look_for = "CriOS"
@@ -571,7 +600,7 @@ class Android(Dist):
     skip_if_found = ['Windows Phone']
 
     def getVersion(self, agent, word):
-        return agent.split(word)[-1].split(';')[0].strip()
+        return agent.split(word)[-1].replace(')', ';').split(';')[0].strip()
 
 
 class WebOS(Dist):
@@ -639,22 +668,29 @@ def detect(agent, fill_none=False):
                 pass
 
     if fill_none:
-        attrs_d = {'name': None, 'version': None}
-        for key in ('os', 'browser'):
-            if key not in result:
-                result[key] = attrs_d
-            else:
-                for k, v in attrs_d.items():
-                    result[k] = v
+        for outer_key in ('os', 'browser'):
+            outer_value = result.setdefault(outer_key, dict())
+            for inner_key in ('name', 'version'):
+                outer_value.setdefault(inner_key, None)
 
     return result
 
 
-def simple_detect(agent):
+UNKNOWN_OS_NAME = 'Unknown OS'
+UNKNOWN_BROWSER_NAME = 'Unknown Browser'
+
+
+def simple_detect_tuple(agent, parsed_agent=None):
     """
-    -> (os, browser) # tuple of strings
+    @params:
+        agent::str
+        parsed_agent::dict
+            The result of detect, used to save calculations
+
+    @return:
+        (os_name, os_version, browser_name, browser_version)::Tuple(str)
     """
-    result = detect(agent)
+    result = parsed_agent or detect(agent)
     os_list = []
     if 'flavor' in result:
         os_list.append(result['flavor']['name'])
@@ -663,11 +699,26 @@ def simple_detect(agent):
     if 'os' in result:
         os_list.append(result['os']['name'])
 
-    os = os_list and " ".join(os_list) or "Unknown OS"
+    os = os_list and " ".join(os_list) or UNKNOWN_OS_NAME
     os_version = os_list and (result.get('flavor') and result['flavor'].get('version')) or \
         (result.get('dist') and result['dist'].get('version')) or (result.get('os') and result['os'].get('version')) or ""
-    browser = 'browser' in result and result['browser'].get('name') or 'Unknown Browser'
+    browser = 'browser' in result and result['browser'].get('name') or UNKNOWN_BROWSER_NAME
     browser_version = 'browser' in result and result['browser'].get('version') or ""
+
+    return os, os_version, browser, browser_version
+
+
+def simple_detect(agent, parsed_agent=None):
+    """
+    @params:
+        agent::str
+        parsed_agent::dict
+            The result of detect, used to save calculations
+
+    @return:
+        (os_name_version, browser_name_version)::Tuple(str)
+    """
+    os, os_version, browser, browser_version = simple_detect_tuple(agent, parsed_agent=parsed_agent)
     if browser_version:
         browser = " ".join((browser, browser_version))
     if os_version:

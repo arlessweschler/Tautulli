@@ -15,22 +15,84 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
+import functools
+import json
 import os
+import ssl
 import sys
+from ipaddress import ip_network
+from pathlib import Path
 
+import cheroot.errors
 import cherrypy
+import cherrypy_cors
 
 import plexpy
-if plexpy.PYTHON2:
-    import logger
-    import webauth
-    from helpers import create_https_certificates
-    from webserve import WebInterface, BaseRedirect
-else:
-    from plexpy import logger
-    from plexpy import webauth
-    from plexpy.helpers import create_https_certificates
-    from plexpy.webserve import WebInterface, BaseRedirect
+from plexpy import logger
+from plexpy import webauth
+from plexpy.helpers import create_https_certificates, hash_pms_uuid, is_valid_ip
+from plexpy.webserve import WebInterface, BaseRedirect
+
+
+def _patch_cheroot_makefile():
+    """Patch cheroot makefile to handle socket errors during cleanup.
+
+    When pages are refreshed quickly, sockets can become invalid before
+    the buffer finishes flushing, causing OSError exceptions during cleanup.
+    This patch catches those errors to prevent "Exception ignored in __del__" warnings.
+    """
+    try:
+        import _pyio as io
+        from cheroot import makefile
+
+        def _flush_unlocked_patched(self):
+            """Patched version that handles OSError during socket writes."""
+            self._checkClosed('flush of closed file')
+            while self._write_buf:
+                try:
+                    n = self.raw.write(bytes(self._write_buf))
+                except io.BlockingIOError as e:
+                    n = e.characters_written
+                except OSError:
+                    # Socket is no longer valid (e.g., on rapid page refresh)
+                    # Clear the buffer and exit to avoid exception during cleanup
+                    self._write_buf.clear()
+                    break
+                del self._write_buf[:n]
+
+        makefile.BufferedWriter._flush_unlocked = _flush_unlocked_patched
+    except Exception:
+        logger.debug("Tautulli WebStart :: Unable to patch the cheroot socket writer.", exc_info=True)
+
+
+def _patch_cherrypy_cors_preflight():
+    """Monkey patch vendored cherrypy_cors preflight validation.
+
+    The vendored cherrypy_cors implementation compares the requested
+    method and request headers using exact case, which can cause valid
+    preflight requests to fail and drop the CORS preflight headers.
+    """
+    try:
+        cors_cls = cherrypy_cors.CORS
+    except AttributeError:
+        return
+
+    def _has_valid_method(self, allowed_methods):
+        return (
+            self.requested_method
+            and self.requested_method.upper() in [method.upper() for method in allowed_methods]
+        )
+
+    def _valid_headers(self, allowed_headers):
+        if self.requested_headers and allowed_headers:
+            allowed_headers = [header.lower() for header in allowed_headers]
+            for header in self.requested_headers.split(','):
+                if header.strip().lower() not in allowed_headers:
+                    return False
+        return True
+
+    cors_cls._has_valid_method = _has_valid_method
+    cors_cls._valid_headers = _valid_headers
 
 
 def start():
@@ -45,6 +107,7 @@ def start():
         'https_cert': plexpy.CONFIG.HTTPS_CERT,
         'https_cert_chain': plexpy.CONFIG.HTTPS_CERT_CHAIN,
         'https_key': plexpy.CONFIG.HTTPS_KEY,
+        'https_min_tls_version': plexpy.CONFIG.HTTPS_MIN_TLS_VERSION,
         'http_username': plexpy.CONFIG.HTTP_USERNAME,
         'http_password': plexpy.CONFIG.HTTP_PASSWORD,
         'http_basic_auth': plexpy.CONFIG.HTTP_BASIC_AUTH
@@ -55,6 +118,7 @@ def start():
 def stop():
     logger.info("Tautulli WebStart :: Stopping Tautulli web server...")
     cherrypy.engine.exit()
+    cherrypy.server.httpserver = None
 
 
 def restart():
@@ -64,6 +128,12 @@ def restart():
 
 
 def initialize(options):
+    # Monkey-patch vendored cherrypy_cors preflight validation to handle case-insensitive method and header checks
+    _patch_cherrypy_cors_preflight()
+    cherrypy_cors.install()
+
+    # Monkey-patch cheroot makefile to handle socket errors during cleanup
+    _patch_cheroot_makefile()
 
     # HTTPS stuff stolen from sickbeard
     enable_https = options['enable_https']
@@ -93,7 +163,7 @@ def initialize(options):
         'server.socket_timeout': 60,
         'tools.encode.on': True,
         'tools.encode.encoding': 'utf-8',
-        'tools.decode.on': True
+        'tools.decode.on': True,
     }
 
     if plexpy.DEV:
@@ -101,6 +171,18 @@ def initialize(options):
         options_dict['engine.autoreload.on'] = True
 
     if enable_https:
+        context = ssl.create_default_context(
+            purpose=ssl.Purpose.CLIENT_AUTH,
+            cafile=https_cert_chain
+        )
+
+        min_tls_version = options['https_min_tls_version'].replace('.', '_')
+        context.minimum_version = getattr(ssl.TLSVersion, min_tls_version, ssl.TLSVersion.TLSv1_2)
+        logger.debug("Tautulli WebStart :: Minimum TLS version set to %s.", context.minimum_version.name)
+
+        context.load_cert_chain(https_cert, https_key)
+
+        options_dict['server.ssl_context'] = context
         options_dict['server.ssl_certificate'] = https_cert
         options_dict['server.ssl_certificate_chain'] = https_cert_chain
         options_dict['server.ssl_private_key'] = https_key
@@ -127,6 +209,11 @@ def initialize(options):
             basic_auth_enabled = False
             cherrypy.tools.auth = cherrypy.Tool('before_handler', webauth.check_auth, priority=2)
     else:
+        logger.warn("Tautulli WebStart :: Web server authentication is disabled!")
+        if not plexpy.CONFIG.ALLOW_PUBLIC_NO_PASSWORD:
+            logger.warn("Tautulli WebStart :: Without a password, only loopback and local network "
+                        "clients can connect. Set allow_public_no_password = 1 in config.ini to change this.")
+
         plexpy.AUTH_ENABLED = False
         basic_auth_enabled = False
 
@@ -135,119 +222,123 @@ def initialize(options):
     else:
         plexpy.HTTP_ROOT = options['http_root'] = '/'
 
+    cherrypy.tools.csrf = cherrypy.Tool('before_handler', webauth.check_csrf_token, priority=3)
+    cherrypy.tools.nopwgate = cherrypy.Tool('before_handler', no_password_gate, priority=0)
+    cherrypy.tools.secheaders = cherrypy.Tool('before_finalize', set_security_headers)
+
     logger.info("Tautulli WebStart :: Thread Pool Size: %d.", plexpy.CONFIG.HTTP_THREAD_POOL)
     cherrypy.config.update(options_dict)
 
     conf = {
         '/': {
-            'engine.timeout_monitor.on': False,
             'tools.staticdir.root': os.path.join(plexpy.PROG_DIR, 'data'),
             'tools.proxy.on': bool(options['http_proxy']),
             'tools.gzip.on': True,
             'tools.gzip.mime_types': ['text/html', 'text/plain', 'text/css',
                                       'text/javascript', 'application/json',
                                       'application/javascript'],
+            'tools.sessions.on': True,
+            'tools.sessions.name': f'tautulli_session_{hash_pms_uuid()}',
+            # 'early' locking holds an exclusive per-session lock for the
+            # entire duration of every request, serializing all parallel
+            # requests from the same browser (graph XHRs, poster images).
+            # The session is only ever written when the CSRF token is set;
+            # those sites call acquire_lock() explicitly.
+            'tools.sessions.locking': 'explicit',
             'tools.auth.on': plexpy.AUTH_ENABLED,
             'tools.auth_basic.on': basic_auth_enabled,
             'tools.auth_basic.realm': 'Tautulli web server',
             'tools.auth_basic.checkpassword': cherrypy.lib.auth_basic.checkpassword_dict({
-                options['http_username']: options['http_password']})
+                options['http_username']: options['http_password']}),
+            'tools.csrf.on': True,
+            'tools.nopwgate.on': not options['http_password'] and not plexpy.CONFIG.ALLOW_PUBLIC_NO_PASSWORD,
+            'tools.secheaders.on': True,
+            'error_page.default': error_page,
+            'cors.expose.on': True,
         },
         '/api': {
-            'tools.auth_basic.on': False
+            'tools.auth_basic.on': False,
+            'tools.sessions.on': False,
         },
         '/status': {
-            'tools.auth_basic.on': False
+            'tools.nopwgate.on': False,
+            'tools.auth_basic.on': False,
+            'tools.sessions.on': True,
+        },
+        '/newsletter': {
+            'tools.nopwgate.on': False,
+            'tools.auth_basic.on': False,
+            'tools.sessions.on': True,
+        },
+        '/image': {
+            'tools.nopwgate.on': False,
+            'tools.auth_basic.on': False,
+            'tools.sessions.on': True,
         },
         '/interfaces': {
+            'tools.nopwgate.on': False,
             'tools.staticdir.on': True,
             'tools.staticdir.dir': "interfaces",
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
             'tools.expires.on': True,
             'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
             'tools.sessions.on': False,
-            'tools.auth.on': False
+            'tools.auth.on': False,
         },
         '/images': {
+            'tools.nopwgate.on': False,
             'tools.staticdir.on': True,
             'tools.staticdir.dir': "interfaces/default/images",
             'tools.staticdir.content_types': {'svg': 'image/svg+xml'},
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
             'tools.expires.on': True,
             'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
             'tools.sessions.on': False,
-            'tools.auth.on': False
+            'tools.auth.on': False,
         },
         '/css': {
+            'tools.nopwgate.on': False,
             'tools.staticdir.on': True,
             'tools.staticdir.dir': "interfaces/default/css",
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
             'tools.expires.on': True,
             'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
             'tools.sessions.on': False,
-            'tools.auth.on': False
+            'tools.auth.on': False,
         },
         '/fonts': {
+            'tools.nopwgate.on': False,
             'tools.staticdir.on': True,
             'tools.staticdir.dir': "interfaces/default/fonts",
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
             'tools.expires.on': True,
             'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
             'tools.sessions.on': False,
-            'tools.auth.on': False
+            'tools.auth.on': False,
         },
         '/js': {
+            'tools.nopwgate.on': False,
             'tools.staticdir.on': True,
             'tools.staticdir.dir': "interfaces/default/js",
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
             'tools.expires.on': True,
             'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
             'tools.sessions.on': False,
-            'tools.auth.on': False
-        },
-        '/cache': {
-            'tools.staticdir.on': True,
-            'tools.staticdir.dir': plexpy.CONFIG.CACHE_DIR,
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
-            'tools.expires.on': True,
-            'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
-            'tools.sessions.on': False,
-            'tools.auth.on': False
-        },
-        '/pms_image_proxy': {
-           'tools.caching.on': True,
-           'tools.caching.force': True,
-           'tools.caching.delay': 0,
-           'tools.expires.on': True,
-           'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
-           'tools.auth.on': False,
-           'tools.sessions.on': False
+            'tools.auth.on': False,
         },
         '/favicon.ico': {
+            'tools.nopwgate.on': False,
             'tools.staticfile.on': True,
             'tools.staticfile.filename': os.path.abspath(os.path.join(
                 plexpy.PROG_DIR, 'data/interfaces/default/images/favicon/favicon.ico')),
-            'tools.caching.on': True,
-            'tools.caching.force': True,
-            'tools.caching.delay': 0,
             'tools.expires.on': True,
             'tools.expires.secs': 60 * 60 * 24 * 30,  # 30 days
             'tools.sessions.on': False,
-            'tools.auth.on': False
+            'tools.auth.on': False,
         }
     }
+
+    # Catch shutdown errors that can break cherrypy/cheroot
+    # See https://github.com/cherrypy/cheroot/issues/710
+    try:
+        cheroot.errors.acceptable_sock_shutdown_exceptions += (OSError,)
+    except AttributeError:
+        pass
 
     cherrypy.tree.mount(WebInterface(), options['http_root'], config=conf)
     if plexpy.HTTP_ROOT != '/':
@@ -256,7 +347,6 @@ def initialize(options):
     try:
         logger.info("Tautulli WebStart :: Starting Tautulli web server on %s://%s:%d%s", protocol,
                     options['http_host'], options['http_port'], options['http_root'])
-        #cherrypy.process.servers.check_port(str(options['http_host']), options['http_port'])
         if not plexpy.DEV:
             cherrypy.server.start()
         else:
@@ -265,19 +355,18 @@ def initialize(options):
             cherrypy.engine.block()
     except IOError as e:
         logger.error("Tautulli WebStart :: Failed to start Tautulli: %s", e)
+        plexpy.alert_message('Failed to start Tautulli: %s' % e)
         sys.exit(1)
 
     cherrypy.server.wait()
 
 
-def proxy():
-    # logger.debug("REQUEST URI: %s, HEADER [X-Forwarded-Host]: %s, [X-Host]: %s, [Origin]: %s, [Host]: %s",
-    #              cherrypy.request.wsgi_environ['REQUEST_URI'],
-    #              cherrypy.request.headers.get('X-Forwarded-Host'),
-    #              cherrypy.request.headers.get('X-Host'),
-    #              cherrypy.request.headers.get('Origin'),
-    #              cherrypy.request.headers.get('Host'))
+def error_page(status, message, traceback, version):
+    cherrypy.response.headers['Content-Type'] = 'application/json'
+    return json.dumps({"status": status, "message": message, "error": True}).encode('utf-8')
 
+
+def proxy():
     # Change cherrpy.tools.proxy.local header if X-Forwarded-Host header is not present
     local = 'X-Forwarded-Host'
     if not cherrypy.request.headers.get('X-Forwarded-Host'):
@@ -287,7 +376,74 @@ def proxy():
             local = 'Origin'
         elif cherrypy.request.headers.get('Host'):  # nginx
             local = 'Host'
-        # logger.debug("cherrypy.tools.proxy.local set to [%s]", local)
 
     # Call original cherrypy proxy tool with the new local
     cherrypy.lib.cptools.proxy(local=local)
+
+
+_FORWARD_HEADERS = ('X-Forwarded-For', 'Forwarded', 'X-Real-IP', 'Via')
+_LOCAL_NETWORKS = [ip_network(n) for n in (
+    '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10',
+    '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10')]
+
+
+def _parse_ip(address):
+    ip = is_valid_ip(str(address).split('%')[0].strip())
+    if ip is False:
+        return None
+    return ip.ipv4_mapped or ip if ip.version == 6 else ip
+
+
+def _is_local(ip):
+    return ip is not None and any(ip in net for net in _LOCAL_NETWORKS)
+
+
+@functools.lru_cache(maxsize=1000)
+def _log_refused(client, reason):
+    logger.warn("Tautulli WebStart :: Refused %s. No password is set. %s", client, reason)
+
+
+def no_password_gate():
+    """Refuse clients outside the local network while no password is set."""
+    request = cherrypy.request
+    # The proxy tool overwrites remote.ip, so read the real peer from WSGI.
+    peer = _parse_ip(request.wsgi_environ.get('REMOTE_ADDR'))
+    client = peer
+    reason = None
+
+    if _is_local(peer):
+        xff = request.headers.get('X-Forwarded-For')
+        if plexpy.CONFIG.HTTP_PROXY and xff:
+            # The client controls the leftmost entry. The trusted proxy adds the rightmost.
+            client = _parse_ip(xff.split(',')[-1])
+        elif any(request.headers.get(h) for h in _FORWARD_HEADERS):
+            reason = ("The reverse proxy must send X-Forwarded-For." if plexpy.CONFIG.HTTP_PROXY else
+                      "A reverse proxy forwarded this request, and Enable HTTP Proxy is off.")
+
+    if reason is None:
+        if _is_local(client):
+            return
+        if client is None:
+            reason = "Tautulli could not read the client address."
+        else:
+            reason = "The client address %s is not on the local network." % client
+            if client.version == 6:
+                reason += " Public IPv6 addresses count as remote."
+
+    _log_refused(str(client or peer), reason)
+
+    response = cherrypy.response
+    response.status = 403
+    response.headers['Content-Type'] = 'text/plain;charset=utf-8'
+    response.body = ("Tautulli refused this connection because no password is set and "
+                     "you are not on the local network.\n\n"
+                     "Connect to Tautulli from the local network to set a password in the Settings.\n").encode('utf-8')
+    request.handler = None
+
+
+def set_security_headers():
+    headers = cherrypy.response.headers
+    headers['X-Content-Type-Options'] = 'nosniff'
+    headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    if plexpy.CONFIG.X_FRAME_OPTIONS not in ('', '*'):
+        headers['X-Frame-Options'] = plexpy.CONFIG.X_FRAME_OPTIONS

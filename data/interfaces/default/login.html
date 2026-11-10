@@ -1,6 +1,8 @@
 ﻿<%
     import plexpy
-    plex_login = plexpy.CONFIG.HTTP_PLEX_ADMIN or plexpy.CONFIG.ALLOW_GUEST_ACCESS
+    from plexpy.helpers import anon_url
+    from plexpy.webauth import tautulli_login_disabled
+    plex_login = (plexpy.CONFIG.HTTP_PLEX_ADMIN or plexpy.CONFIG.ALLOW_GUEST_ACCESS) and plexpy.CONFIG.FIRST_RUN_COMPLETE
 %>
 <!doctype html>
 
@@ -11,6 +13,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="">
     <meta name="author" content="">
+    <meta name="referrer" content="no-referrer">
+    <meta name="csrf-token" content="${_csrf_token}">
     <link href="${http_root}css/bootstrap3/bootstrap.min.css" rel="stylesheet">
     <link href="${http_root}css/tautulli.css${cache_param}" rel="stylesheet">
     <link href="${http_root}css/opensans.min.css" rel="stylesheet">
@@ -24,7 +28,7 @@
 
     <!-- ICONS -->
     <!-- Android -->
-    <link rel="manifest" href="${http_root}images/favicon/manifest.json?v=2.6.0" crossorigin="use-credentials">
+    <link rel="manifest" href="${http_root}images/favicon/manifest.json?v=2.9.0" crossorigin="use-credentials">
     <meta name="theme-color" content="#282a2d">
     <!-- Apple -->
     <link rel="apple-touch-icon" sizes="180x180" href="${http_root}images/favicon/apple-touch-icon.png?v=2.6.0">
@@ -50,6 +54,11 @@
                 </div>
                 <div class="row">
                     <div class="col-sm-6 col-sm-offset-3">
+                        % if not plexpy.CONFIG.FIRST_RUN_COMPLETE:
+                        <div class="alert alert-warning" role="alert">On a new install, the username and password are in the <a class="alert-link" href="${anon_url('https://github.com/Tautulli/Tautulli/wiki/Installation#tautulli-login')}" target="_blank" rel="noreferrer">Tautulli logs</a>.</div>
+                        % elif plexpy.CONFIG.FIRST_RUN_COMPLETE and plexpy.CONFIG.HTTP_PASSWORD and plexpy.CONFIG.HTTP_PASSWORD == plexpy.CONFIG.HTTP_GENERATED_PASSWORD and not tautulli_login_disabled():
+                        <div class="alert alert-warning" role="alert">Tautulli set a password because none was set. The username and password are in the <a class="alert-link" href="${anon_url('https://github.com/Tautulli/Tautulli/wiki/Installation#tautulli-login')}" target="_blank" rel="noreferrer">Tautulli logs</a>.</div>
+                        % endif
                         <ul id="login-methods" class="accordion list-unstyled">
                             % if plex_login:
                             <li class="open">
@@ -70,6 +79,7 @@
                                 </ul>
                             </li>
                             % endif
+                            % if not tautulli_login_disabled():
                             <li class="${'open' if not plex_login else ''}">
                                 <div class="link login-method-header">
                                     Sign In with Tautulli
@@ -101,6 +111,7 @@
                                     </li>
                                 </ul>
                             </li>
+                            % endif
                         </ul>
                     </div>
                 </div>
@@ -109,21 +120,27 @@
     </div>
 </div>
 
-<script src="${http_root}js/jquery-3.5.1.min.js"></script>
+<script src="${http_root}js/jquery-3.6.0.min.js"></script>
 <script src="${http_root}js/platform.min.js"></script>
 <script src="${http_root}js/script.js${cache_param}"></script>
 <script>
     var login_accordion = new Accordion($('#login-methods'), false, false);
 
+    function OAuthPreFunction() {
+        $('#sign-in-alert').hide();
+    }
     function OAuthSuccessCallback(authToken) {
         signIn(true, authToken);
     }
     function OAuthErrorCallback() {
         $('#sign-in-alert').text('Error communicating with Plex.tv.').show();
     }
+    function OAuthMaxRetryCallback() {
+        $('#sign-in-alert').text('Authentication timed out. Please try again.').show();
+    }
 
     $('#sign-in-plex').click(function() {
-        PlexOAuth(OAuthSuccessCallback, OAuthErrorCallback);
+        PlexOAuth(OAuthSuccessCallback, OAuthErrorCallback, OAuthMaxRetryCallback, null, OAuthPreFunction);
     });
 
     $('#login-form').submit(function(event) {
@@ -169,6 +186,9 @@
                         $('#sign-in-alert').text('Incorrect username or password.').show();
                         $('#username').focus();
                     }
+                },
+                403: function(xhr, status) {
+                    $('#sign-in-alert').text('Invalid CSRF token. Refresh the page and try again.').show();
                 },
                 429: function(xhr, status) {
                     var retry = Math.ceil(xhr.getResponseHeader('Retry-After') / 60)

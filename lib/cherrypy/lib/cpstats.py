@@ -184,7 +184,6 @@ To report statistics::
 To format statistics reports::
 
     See 'Reporting', above.
-
 """
 
 import logging
@@ -193,10 +192,8 @@ import sys
 import threading
 import time
 
-import six
-
 import cherrypy
-from cherrypy._cpcompat import json
+from cherrypy._json import json
 
 # ------------------------------- Statistics -------------------------------- #
 
@@ -207,7 +204,7 @@ if not hasattr(logging, 'statistics'):
 def extrapolate_statistics(scope):
     """Return an extrapolated copy of the given scope."""
     c = {}
-    for k, v in list(scope.items()):
+    for k, v in scope.copy().items():
         if isinstance(v, dict):
             v = extrapolate_statistics(v)
         elif isinstance(v, (list, tuple)):
@@ -256,7 +253,6 @@ def proc_time(s):
 
 
 class ByteCountWrapper(object):
-
     """Wraps a file-like object, counting the number of bytes read."""
 
     def __init__(self, rfile):
@@ -309,7 +305,6 @@ def _get_threading_ident():
 
 
 class StatsTool(cherrypy.Tool):
-
     """Record various information about the current request."""
 
     def __init__(self):
@@ -318,8 +313,8 @@ class StatsTool(cherrypy.Tool):
     def _setup(self):
         """Hook this tool into cherrypy.request.
 
-        The standard CherryPy request object will automatically call this
-        method when the tool is "turned on" in config.
+        The standard CherryPy request object will automatically call
+        this method when the tool is "turned on" in config.
         """
         if appstats.get('Enabled', False):
             cherrypy.Tool._setup(self)
@@ -366,8 +361,8 @@ class StatsTool(cherrypy.Tool):
             w['Bytes Written'] = cl
             appstats['Total Bytes Written'] += cl
 
-        w['Response Status'] = getattr(
-            resp, 'output_status', None) or resp.status
+        w['Response Status'] = \
+            getattr(resp, 'output_status', resp.status).decode()
 
         w['End Time'] = time.time()
         p = w['End Time'] - w['Start Time']
@@ -613,7 +608,7 @@ table.stats2 th {
         """Return ([headers], [rows]) for the given collection."""
         # E.g., the 'Requests' dict.
         headers = []
-        vals = six.itervalues(v)
+        vals = v.values()
         for record in vals:
             for k3 in record:
                 format = formatting.get(k3, missing)
@@ -679,7 +674,7 @@ table.stats2 th {
         def data(self):
             s = extrapolate_statistics(logging.statistics)
             cherrypy.response.headers['Content-Type'] = 'application/json'
-            return json.dumps(s, sort_keys=True, indent=4)
+            return json.dumps(s, sort_keys=True, indent=4).encode('utf-8')
 
     @cherrypy.expose
     def pause(self, namespace):

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 # This file is part of Tautulli.
 #
@@ -17,9 +17,6 @@
 
 # Mostly borrowed from https://github.com/trakt/Plex-Trakt-Scrobbler
 
-from __future__ import unicode_literals
-from future.builtins import str
-
 import json
 import ssl
 import threading
@@ -29,18 +26,12 @@ import certifi
 import websocket
 
 import plexpy
-if plexpy.PYTHON2:
-    import activity_handler
-    import activity_pinger
-    import activity_processor
-    import database
-    import logger
-else:
-    from plexpy import activity_handler
-    from plexpy import activity_pinger
-    from plexpy import activity_processor
-    from plexpy import database
-    from plexpy import logger
+from plexpy import activity_handler
+from plexpy import activity_pinger
+from plexpy import activity_processor
+from plexpy import database
+from plexpy import logger
+from plexpy import plextv
 
 
 name = 'websocket'
@@ -55,7 +46,7 @@ def start_thread():
         # Check for any existing sessions on start up
         activity_pinger.check_active_sessions(ws_request=True)
     except Exception as e:
-        logger.error("Tautulli WebSocket :: Failed to check for active sessions: %s." % e)
+        logger.exception("Tautulli WebSocket :: Failed to check for active sessions: %s." % e)
         logger.warn("Tautulli WebSocket :: Attempt to fix by flushing temporary sessions...")
         database.delete_sessions()
 
@@ -102,6 +93,7 @@ def on_disconnect():
 
 
 def on_intdown():
+    plextv.notify_token_expired()
     plexpy.NOTIFY_QUEUE.put({'notify_action': 'on_intdown'})
 
 
@@ -110,7 +102,7 @@ def on_intup():
 
 
 def reconnect():
-    close()
+    shutdown()
     logger.info("Tautulli WebSocket :: Reconnecting websocket...")
     start_thread()
 
@@ -165,7 +157,10 @@ def run():
         uri = plexpy.CONFIG.PMS_URL.replace('https://', 'wss://') + '/:/websockets/notifications'
         secure = 'secure '
         if plexpy.CONFIG.VERIFY_SSL_CERT:
-            sslopt = {'ca_certs': certifi.where()}
+            # certifi covers a Python with no system CA store, like the macOS app
+            context = ssl.create_default_context()
+            context.load_verify_locations(certifi.where())
+            sslopt = {'context': context}
         else:
             sslopt = {'cert_reqs': ssl.CERT_NONE}
     else:
@@ -178,9 +173,11 @@ def run():
 
     # Set authentication token (if one is available)
     if plexpy.CONFIG.PMS_TOKEN:
-        header = ["X-Plex-Token: %s" % plexpy.CONFIG.PMS_TOKEN]
+        header = {"X-Plex-Token": plexpy.CONFIG.PMS_TOKEN}
     else:
-        header = []
+        header = None
+
+    timeout = plexpy.CONFIG.PMS_TIMEOUT
 
     global ws_shutdown
     ws_shutdown = False
@@ -189,7 +186,7 @@ def run():
     # Try an open the websocket connection
     logger.info("Tautulli WebSocket :: Opening %swebsocket." % secure)
     try:
-        plexpy.WEBSOCKET = create_connection(uri, header=header, sslopt=sslopt)
+        plexpy.WEBSOCKET = create_connection(uri, timeout=timeout, header=header, sslopt=sslopt)
         logger.info("Tautulli WebSocket :: Ready")
         plexpy.WS_CONNECTED = True
     except (websocket.WebSocketException, IOError, Exception) as e:
@@ -212,7 +209,7 @@ def run():
             if reconnects == 0:
                 logger.warn("Tautulli WebSocket :: Connection has closed.")
 
-            if not plexpy.CONFIG.PMS_IS_CLOUD and reconnects < plexpy.CONFIG.WEBSOCKET_CONNECTION_ATTEMPTS:
+            if reconnects < plexpy.CONFIG.WEBSOCKET_CONNECTION_ATTEMPTS:
                 reconnects += 1
 
                 # Sleep 5 between connection attempts
@@ -222,7 +219,7 @@ def run():
                 logger.warn("Tautulli WebSocket :: Reconnection attempt %s." % str(reconnects))
 
                 try:
-                    plexpy.WEBSOCKET = create_connection(uri, header=header)
+                    plexpy.WEBSOCKET = create_connection(uri, timeout=timeout, header=header, sslopt=sslopt)
                     logger.info("Tautulli WebSocket :: Ready")
                     plexpy.WS_CONNECTED = True
                 except (websocket.WebSocketException, IOError, Exception) as e:
@@ -236,7 +233,8 @@ def run():
             if ws_shutdown:
                 break
 
-            logger.error("Tautulli WebSocket :: %s.", e)
+            logger.error("Tautulli WebSocket :: %s.", e,
+                         exc_info=not isinstance(e, (websocket.WebSocketException, OSError)))
             close()
             break
 
@@ -265,8 +263,20 @@ def receive(ws):
     return None, None
 
 
+# The event types Tautulli processes; anything else is discarded before
+# paying for the UTF-8 decode, debug-log write, and JSON parse
+_EVENT_TYPE_TOKENS = (b'"playing"', b'"timeline"', b'"reachability"')
+
+
 def process(opcode, data):
     if opcode not in opcode_data:
+        return False
+
+    # Plex emits many event types Tautulli ignores (progress,
+    # transcodeSession.update, ...), often several per second during
+    # transcodes. This is only a cheap prefilter: the authoritative
+    # type check on the parsed JSON still happens below.
+    if not any(token in data for token in _EVENT_TYPE_TOKENS):
         return False
 
     try:
@@ -274,7 +284,7 @@ def process(opcode, data):
         logger.websocket_debug(data)
         event = json.loads(data)
     except Exception as e:
-        logger.warn("Tautulli WebSocket :: Error decoding message from websocket: %s" % e)
+        logger.warn("Tautulli WebSocket :: Error decoding message from websocket: %s" % e, exc_info=True)
         logger.websocket_error(data)
         return False
 
@@ -288,7 +298,7 @@ def process(opcode, data):
         event_data = event.get('PlaySessionStateNotification', event.get('_children', {}))
 
         if not event_data:
-            logger.debug("Tautulli WebSocket :: Session event found but unable to get websocket data.")
+            logger.warn("Tautulli WebSocket :: Session event found but unable to get websocket data.")
             return False
 
         try:
@@ -297,11 +307,11 @@ def process(opcode, data):
         except Exception as e:
             logger.exception("Tautulli WebSocket :: Failed to process session data: %s." % e)
 
-    if event_type == 'timeline':
+    elif event_type == 'timeline':
         event_data = event.get('TimelineEntry', event.get('_children', {}))
 
         if not event_data:
-            logger.debug("Tautulli WebSocket :: Timeline event found but unable to get websocket data.")
+            logger.warn("Tautulli WebSocket :: Timeline event found but unable to get websocket data.")
             return False
 
         try:
@@ -310,11 +320,11 @@ def process(opcode, data):
         except Exception as e:
             logger.exception("Tautulli WebSocket :: Failed to process timeline data: %s." % e)
 
-    if event_type == 'reachability':
+    elif event_type == 'reachability':
         event_data = event.get('ReachabilityNotification', event.get('_children', {}))
 
         if not event_data:
-            logger.debug("Tautulli WebSocket :: Reachability event found but unable to get websocket data.")
+            logger.warn("Tautulli WebSocket :: Reachability event found but unable to get websocket data.")
             return False
 
         try:

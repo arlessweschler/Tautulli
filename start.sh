@@ -7,12 +7,12 @@ if [[ "$TAUTULLI_DOCKER" == "True" ]]; then
     groupmod -o -g "$PGID" tautulli
     usermod -o -u "$PUID" tautulli
 
-    chown -R tautulli:tautulli /config
+    find /config \! \( -uid $(id -u tautulli) -gid $(id -g tautulli) \) -print0 | xargs -0r chown tautulli:tautulli
 
     echo "Running Tautulli using user tautulli (uid=$(id -u tautulli)) and group tautulli (gid=$(id -g tautulli))"
     exec gosu tautulli "$@"
 else
-    python_versions=("python3" "python3.8" "python3.7" "python3.6" "python" "python2" "python2.7")
+    python_versions=("python3.11" "python3" "python")
     for cmd in "${python_versions[@]}"; do
         if command -v "$cmd" >/dev/null; then
             echo "Starting Tautulli with $cmd."

@@ -18,27 +18,26 @@ by adding a named handler to Config.namespaces. The name can be any string,
 and the handler must be either a callable or a context manager.
 """
 
-from cherrypy._cpcompat import text_or_bytes
-from six.moves import configparser
-from six.moves import builtins
-
+import builtins
+import configparser
 import operator
 import sys
 
+from cherrypy._cpcompat import text_or_bytes
+
 
 class NamespaceSet(dict):
-
     """A dict of config namespace names and handlers.
 
-    Each config entry should begin with a namespace name; the corresponding
-    namespace handler will be called once for each config entry in that
-    namespace, and will be passed two arguments: the config key (with the
-    namespace removed) and the config value.
+    Each config entry should begin with a namespace name; the
+    corresponding namespace handler will be called once for each config
+    entry in that namespace, and will be passed two arguments: the
+    config key (with the namespace removed) and the config value.
 
     Namespace handlers may be any Python callable; they may also be
-    Python 2.5-style 'context managers', in which case their __enter__
-    method should return a callable to be used as the handler.
-    See cherrypy.tools (the Toolbox class) for an example.
+    context managers, in which case their __enter__ method should return
+    a callable to be used as the handler. See cherrypy.tools (the
+    Toolbox class) for an example.
     """
 
     def __call__(self, config):
@@ -48,9 +47,10 @@ class NamespaceSet(dict):
             A flat dict, where keys use dots to separate
             namespaces, and values are arbitrary.
 
-        The first name in each config key is used to look up the corresponding
-        namespace handler. For example, a config entry of {'tools.gzip.on': v}
-        will call the 'tools' namespace handler with the args: ('gzip.on', v)
+        The first name in each config key is used to look up the
+        corresponding namespace handler. For example, a config entry of
+        {'tools.gzip.on': v} will call the 'tools' namespace handler
+        with the args: ('gzip.on', v)
         """
         # Separate the given config into namespaces
         ns_confs = {}
@@ -61,10 +61,10 @@ class NamespaceSet(dict):
                 bucket[name] = config[k]
 
         # I chose __enter__ and __exit__ so someday this could be
-        # rewritten using Python 2.5's 'with' statement:
-        # for ns, handler in six.iteritems(self):
+        # rewritten using 'with' statement:
+        # for ns, handler in self.items():
         #     with handler as callable:
-        #         for k, v in six.iteritems(ns_confs.get(ns, {})):
+        #         for k, v in ns_confs.get(ns, {}).items():
         #             callable(k, v)
         for ns, handler in self.items():
             exit = getattr(handler, '__exit__', None)
@@ -103,7 +103,6 @@ class NamespaceSet(dict):
 
 
 class Config(dict):
-
     """A dict-like set of configuration data, with defaults and namespaces.
 
     May take a file, filename, or dict.
@@ -163,14 +162,11 @@ class Parser(configparser.ConfigParser):
             #     fp = open(filename)
             # except IOError:
             #     continue
-            fp = open(filename)
-            try:
+            with open(filename) as fp:
                 self._read(fp, filename)
-            finally:
-                fp.close()
 
     def as_dict(self, raw=False, vars=None):
-        """Convert an INI file to a dictionary"""
+        """Convert an INI file to a dictionary."""
         # Load INI file into a dict
         result = {}
         for section in self.sections():
@@ -191,7 +187,7 @@ class Parser(configparser.ConfigParser):
 
     def dict_from_file(self, file):
         if hasattr(file, 'read'):
-            self.readfp(file)
+            self.read_file(file)
         else:
             self.read(file)
         return self.as_dict()
@@ -211,122 +207,7 @@ class Parser(configparser.ConfigParser):
 # public domain "unrepr" implementation, found on the web and then improved.
 
 
-class _Builder2:
-
-    def build(self, o):
-        m = getattr(self, 'build_' + o.__class__.__name__, None)
-        if m is None:
-            raise TypeError('unrepr does not recognize %s' %
-                            repr(o.__class__.__name__))
-        return m(o)
-
-    def astnode(self, s):
-        """Return a Python2 ast Node compiled from a string."""
-        try:
-            import compiler
-        except ImportError:
-            # Fallback to eval when compiler package is not available,
-            # e.g. IronPython 1.0.
-            return eval(s)
-
-        p = compiler.parse('__tempvalue__ = ' + s)
-        return p.getChildren()[1].getChildren()[0].getChildren()[1]
-
-    def build_Subscript(self, o):
-        expr, flags, subs = o.getChildren()
-        expr = self.build(expr)
-        subs = self.build(subs)
-        return expr[subs]
-
-    def build_CallFunc(self, o):
-        children = o.getChildren()
-        # Build callee from first child
-        callee = self.build(children[0])
-        # Build args and kwargs from remaining children
-        args = []
-        kwargs = {}
-        for child in children[1:]:
-            class_name = child.__class__.__name__
-            # None is ignored
-            if class_name == 'NoneType':
-                continue
-            # Keywords become kwargs
-            if class_name == 'Keyword':
-                kwargs.update(self.build(child))
-            # Everything else becomes args
-            else:
-                args.append(self.build(child))
-
-        return callee(*args, **kwargs)
-
-    def build_Keyword(self, o):
-        key, value_obj = o.getChildren()
-        value = self.build(value_obj)
-        kw_dict = {key: value}
-        return kw_dict
-
-    def build_List(self, o):
-        return map(self.build, o.getChildren())
-
-    def build_Const(self, o):
-        return o.value
-
-    def build_Dict(self, o):
-        d = {}
-        i = iter(map(self.build, o.getChildren()))
-        for el in i:
-            d[el] = i.next()
-        return d
-
-    def build_Tuple(self, o):
-        return tuple(self.build_List(o))
-
-    def build_Name(self, o):
-        name = o.name
-        if name == 'None':
-            return None
-        if name == 'True':
-            return True
-        if name == 'False':
-            return False
-
-        # See if the Name is a package or module. If it is, import it.
-        try:
-            return modules(name)
-        except ImportError:
-            pass
-
-        # See if the Name is in builtins.
-        try:
-            return getattr(builtins, name)
-        except AttributeError:
-            pass
-
-        raise TypeError('unrepr could not resolve the name %s' % repr(name))
-
-    def build_Add(self, o):
-        left, right = map(self.build, o.getChildren())
-        return left + right
-
-    def build_Mul(self, o):
-        left, right = map(self.build, o.getChildren())
-        return left * right
-
-    def build_Getattr(self, o):
-        parent = self.build(o.expr)
-        return getattr(parent, o.attrname)
-
-    def build_NoneType(self, o):
-        return None
-
-    def build_UnarySub(self, o):
-        return -self.build(o.getChildren()[0])
-
-    def build_UnaryAdd(self, o):
-        return self.build(o.getChildren()[0])
-
-
-class _Builder3:
+class _Builder:
 
     def build(self, o):
         m = getattr(self, 'build_' + o.__class__.__name__, None)
@@ -441,7 +322,6 @@ class _Builder3:
 
         # See if the Name is in builtins.
         try:
-            import builtins
             return getattr(builtins, name)
         except AttributeError:
             pass
@@ -482,10 +362,7 @@ def unrepr(s):
     """Return a Python object compiled from a string."""
     if not s:
         return s
-    if sys.version_info < (3, 0):
-        b = _Builder2()
-    else:
-        b = _Builder3()
+    b = _Builder()
     obj = b.astnode(s)
     return b.build(obj)
 

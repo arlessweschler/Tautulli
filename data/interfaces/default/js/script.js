@@ -1,3 +1,35 @@
+const csrf_token = $('meta[name="csrf-token"]').attr('content');
+const csrfSafeMethod = method => {
+    // these HTTP methods do not require CSRF protection
+    return /^(GET|HEAD|OPTIONS)$/i.test(method);
+};
+$(document).ajaxSend(function(event, jqXHR, settings) {
+    if (!csrfSafeMethod(settings.type) && !settings.crossDomain) {
+        jqXHR.setRequestHeader("X-CSRF-Token", csrf_token);
+    }
+});
+
+// Run a state changing action with POST and show the countdown modal from the page it returns.
+// The page already loaded the scripts, so run only the inline script that starts the countdown.
+function postAndShowPage(url, data) {
+    $.ajax({
+        url: url,
+        data: data,
+        type: 'POST',
+        dataType: 'html',
+        success: function (html) {
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            $('body').append(doc.getElementById('state-change-modal'));
+            $.globalEval($(doc).find('script:not([src])').filter(function () {
+                return this.text.indexOf('state-change-modal') !== -1;
+            }).text());
+        },
+        error: function () {
+            showMsg('<i class="fa fa-times"></i> The request failed.', false, true, 5000, true);
+        }
+    });
+}
+
 var p = {
     name: 'Unknown',
     version: 'Unknown',
@@ -102,7 +134,7 @@ function showMsg(msg, loader, timeout, ms, error) {
 function confirmAjaxCall(url, msg, data, loader_msg, callback) {
     $("#confirm-message").html(msg);
     $('#confirm-modal').modal();
-    $('#confirm-modal').one('click', '#confirm-button', function () {
+    $('#confirm-modal').off('click', '#confirm-button').one('click', '#confirm-button', function () {
         if (loader_msg) {
             showMsg(loader_msg, true, false);
         }
@@ -270,6 +302,7 @@ function resetFilters(text) {
     }
 }
 
+// Callers use done and fail. In jQuery 3, then fills the cell after DataTables sizes the header.
 function isPrivateIP(ip_address) {
     var defer = $.Deferred();
 
@@ -288,25 +321,10 @@ function isPrivateIP(ip_address) {
 }
 
 function humanTime(seconds) {
-    var text;
-    if (seconds >= 86400) {
-        text = '<h3>' + Math.floor(moment.duration(seconds, 'seconds').asDays()) + '</h3><p> days</p>' + '<h3>' +
-            Math.floor(moment.duration((seconds % 86400), 'seconds').asHours()) + '</h3><p> hrs</p>' + '<h3>' +
-            Math.floor(moment.duration(((seconds % 86400) % 3600), 'seconds').asMinutes()) + '</h3><p> mins</p>';
-        return text;
-    } else if (seconds >= 3600) {
-        text = '<h3>' + Math.floor(moment.duration((seconds % 86400), 'seconds').asHours()) + '</h3><p> hrs</p>' +
-            '<h3>' + Math.floor(moment.duration(((seconds % 86400) % 3600), 'seconds').asMinutes()) +
-            '</h3><p> mins</p>';
-        return text;
-    } else if (seconds >= 60) {
-        text = '<h3>' + Math.floor(moment.duration(((seconds % 86400) % 3600), 'seconds').asMinutes()) +
-            '</h3><p> mins</p>';
-        return text;
-    } else {
-        text = '<h3>0</h3><p> mins</p>';
-        return text;
+    if (seconds > 0) {
+        return humanDuration(seconds * 1000).replaceAll(/(\d+) (\w+)/g, '<h3>$1</h3><p>$2</p>')
     }
+    return "<h3>0</h3><p>mins</p>";
 }
 
 String.prototype.toProperCase = function () {
@@ -327,21 +345,17 @@ function getPercent(value1, value2) {
     return Math.round(percent)
 }
 
-function millisecondsToMinutes(ms, roundToMinute) {
+function millisecondsToHoursMinutes(ms) {
     if (ms > 0) {
-      var minutes = Math.floor(ms / 60000);
-      var seconds = ((ms % 60000) / 1000).toFixed(0);
-      if (roundToMinute) {
-          return (seconds >= 30 ? (minutes + 1) : minutes);
-      } else {
-          return (seconds == 60 ? (minutes + 1) + ":00" : minutes + ":" + (seconds < 10 ? "0" : "") + seconds);
-      }
-    } else {
-        if (roundToMinute) {
-            return '0';
-        } else {
-            return '0:00';
+        var hours = Math.floor(ms / 3600000);
+        var minutes = Math.floor((ms % 3600000) / 60000);
+        var seconds = Math.floor(((ms % 3600000) % 60000) / 1000);
+        if (hours > 0) {
+            return hours + ":" + (minutes < 10 ? "0" : "") + minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
         }
+        return minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
+    } else {
+        return '0:00';
     }
 }
 
@@ -362,7 +376,8 @@ function humanDuration(ms, sig='dhm', units='ms', return_seconds=300000) {
             sig = 'dhms'
         }
 
-        ms = ms * factors[units];
+        r = factors[sig.slice(-1)];
+        ms = Math.round(ms * factors[units] / r) * r;
 
         h =  ms % factors['d'];
         d = Math.trunc(ms / factors['d']);
@@ -557,10 +572,9 @@ $.fn.slideToggleBool = function(bool, options) {
 };
 
 function openPlexXML(endpoint, plextv, params) {
-    var data = $.extend({endpoint: endpoint, plextv: plextv}, params);
-    $.getJSON('return_plex_xml_url', data, function(xml_url) {
-       window.open(xml_url, '_blank');
-    });
+    var data = $.extend({endpoint: endpoint, plextv: plextv || false}, params);
+    var query = new URLSearchParams(data)
+    window.open('open_plex_xml?' + query.toString(), '_blank');
 }
 
 function PopupCenter(url, title, w, h) {
@@ -612,17 +626,17 @@ function uuidv4() {
     });
 }
 
-function getPlexHeaders() {
+function getPlexHeaders(clientID) {
     return {
         'Accept': 'application/json',
         'X-Plex-Product': 'Tautulli',
         'X-Plex-Version': 'Plex OAuth',
-        'X-Plex-Client-Identifier': getLocalStorage('Tautulli_ClientID', uuidv4(), false),
+        'X-Plex-Client-Identifier': clientID ? clientID : getLocalStorage('Tautulli_ClientID', uuidv4(), false),
         'X-Plex-Platform': p.name,
         'X-Plex-Platform-Version': p.version,
         'X-Plex-Model': 'Plex OAuth',
         'X-Plex-Device': p.os,
-        'X-Plex-Device-Name': p.name,
+        'X-Plex-Device-Name': p.name + ' (Tautulli)',
         'X-Plex-Device-Screen-Resolution': window.screen.width + 'x' + window.screen.height,
         'X-Plex-Language': 'en'
     };
@@ -676,8 +690,8 @@ function closePlexOAuthWindow() {
     }
 }
 
-getPlexOAuthPin = function () {
-    var x_plex_headers = getPlexHeaders();
+getPlexOAuthPin = function (clientID) {
+    var x_plex_headers = getPlexHeaders(clientID);
     var deferred = $.Deferred();
 
     $.ajax({
@@ -697,16 +711,16 @@ getPlexOAuthPin = function () {
 
 var polling = null;
 
-function PlexOAuth(success, error, pre) {
-    if (typeof pre === "function") {
-        pre()
+function PlexOAuth(successCallback, errorCallback, maxRetryCallback, pollingCallback, preFunction, clientID) {
+    if (typeof preFunction === "function") {
+        preFunction()
     }
     closePlexOAuthWindow();
     plex_oauth_window = PopupCenter('', 'Plex-OAuth', 600, 700);
     $(plex_oauth_window.document.body).html(plex_oauth_loader);
 
-    getPlexOAuthPin().then(function (data) {
-        var x_plex_headers = getPlexHeaders();
+    getPlexOAuthPin(clientID).then(function (data) {
+        var x_plex_headers = getPlexHeaders(clientID);
         const pin = data.pin;
         const code = data.code;
 
@@ -725,41 +739,46 @@ function PlexOAuth(success, error, pre) {
         }
 
         plex_oauth_window.location = 'https://app.plex.tv/auth/#!?' + encodeData(oauth_params);
-        polling = pin;
+        polling = pin;  // Set pin to prevent polling from multiple popups
+
+        let maxPollCount = 120;  // 2 minutes at 1-second intervals
 
         (function poll() {
+            maxPollCount--;
+
             $.ajax({
                 url: 'https://plex.tv/api/v2/pins/' + pin,
                 type: 'GET',
                 headers: x_plex_headers,
                 success: function (data) {
                     if (data.authToken){
+                        polling = null;
                         closePlexOAuthWindow();
-                        if (typeof success === "function") {
-                            success(data.authToken)
-                        }
-                    }
-                },
-                error: function (jqXHR, textStatus, errorThrown) {
-                    if (textStatus !== "timeout") {
-                        closePlexOAuthWindow();
-                        if (typeof error === "function") {
-                            error()
+                        if (typeof successCallback === "function") {
+                            successCallback(data.authToken)
                         }
                     }
                 },
                 complete: function () {
-                    if (!plex_oauth_window.closed && polling === pin){
+                    if (maxPollCount <= 0) {
+                        closePlexOAuthWindow();
+                        if (typeof maxRetryCallback === "function") {
+                            maxRetryCallback()
+                        }
+                    } else if (polling === pin) {
                         setTimeout(function() {poll()}, 1000);
+                        if (typeof pollingCallback === "function") {
+                            pollingCallback(maxPollCount);
+                        }
                     }
                 },
-                timeout: 10000
+                timeout: 1000
             });
         })();
     }, function () {
         closePlexOAuthWindow();
-        if (typeof error === "function") {
-            error()
+        if (typeof errorCallback === "function") {
+            errorCallback()
         }
     });
 }
@@ -893,7 +912,7 @@ function loadBlurHash(elem, src) {
 }
 
 function _toggleRevealToken(elem, click) {
-    var input = elem.parent().next('input');
+    var input = elem.parent().siblings('input');
     if ((input.prop('type') === 'password' && click) || !input.val()) {
         input.prop('type', 'text');
         elem.children('.fa').removeClass('fa-eye-slash').addClass('fa-eye');
@@ -928,3 +947,83 @@ $('.modal').on('hide.bs.modal', function (e) {
         return false;
     }
 });
+
+$.fn.hasScrollBar = function() {
+    return this.get(0).scrollHeight > this.get(0).clientHeight;
+}
+
+function paginateScroller(scrollerId, buttonClass) {
+    $(buttonClass).click(function (e) {
+        e.preventDefault();
+        var scroller = $(scrollerId + "-row-scroller");
+        var scrollerParent = scroller.parent();
+        var containerWidth = scrollerParent.width();
+        var scrollCurrent = scrollerParent.scrollLeft();
+        var scrollAmount = $(this).data("id") * parseInt(containerWidth / 175) * 175;
+        var scrollMax = scroller.width() - Math.abs(scrollAmount);
+        var scrollTotal = Math.min(parseInt(scrollCurrent / 175) * 175 + scrollAmount, scrollMax);
+        scrollerParent.animate({ scrollLeft: scrollTotal }, 250);
+    });    
+}
+
+function highlightScrollerButton(scrollerId) {
+    var scroller = $(scrollerId + "-row-scroller");
+    var scrollerParent = scroller.parent();
+    var buttonLeft = $(scrollerId + "-page-left");
+    var buttonRight = $(scrollerId + "-page-right");
+
+    var numElems = scroller.find("li").length;
+    scroller.width(numElems * 175);
+    $(buttonLeft).addClass("disabled").blur();
+    if (scroller.width() > scrollerParent.width()) {
+        $(buttonRight).removeClass("disabled");
+    } else {
+        $(buttonRight).addClass("disabled");
+    }
+
+    scrollerParent.scroll(function () {
+        var scrollCurrent = $(this).scrollLeft();
+        var scrollMax = scroller.width() - $(this).width();
+
+        if (scrollCurrent == 0) {
+            $(buttonLeft).addClass("disabled").blur();
+        } else {
+            $(buttonLeft).removeClass("disabled");
+        }
+
+        if (scrollCurrent >= scrollMax) {
+            $(buttonRight).addClass("disabled").blur();
+        } else {
+            $(buttonRight).removeClass("disabled");
+        }
+    });
+}
+
+// DataTables with scrollX and autoWidth off does not adjust the header on window resize.
+var adjustTablesTimeout;
+$(window).on('resize', function () {
+    clearTimeout(adjustTablesTimeout);
+    adjustTablesTimeout = setTimeout(function () {
+        if ($.fn.dataTable) $.fn.dataTable.tables({ visible: true, api: true }).columns.adjust();
+        if ($.fn.dataTable && $.fn.dataTable.ColVis) {
+            // Move an open Select columns menu to its button without a new fade.
+            $.each($.fn.dataTable.ColVis.aInstances, function (i, colvis) {
+                if (colvis.s.hidden) return;
+                colvis._fnCollectionShow();
+                $(colvis.dom.collection).stop(true).css('opacity', 1);
+                $(colvis.dom.background).stop(true).css('opacity', 0.1);
+            });
+            keepColVisInWindow();
+        }
+    }, 100);
+});
+
+// A menu wider than the space left of its button would start outside the window.
+function keepColVisInWindow() {
+    $.each($.fn.dataTable.ColVis.aInstances, function (i, colvis) {
+        if (!colvis.s.hidden && parseInt(colvis.dom.collection.style.left, 10) < 0) {
+            colvis.dom.collection.style.left = '0px';
+        }
+    });
+}
+$(document).on('click', 'div.ColVis button', keepColVisInWindow);

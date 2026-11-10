@@ -106,10 +106,7 @@ import os
 import time
 import threading
 import binascii
-
-import six
-from six.moves import cPickle as pickle
-import contextlib2
+import pickle
 
 import zc.lockfile
 
@@ -119,15 +116,10 @@ from cherrypy.lib import locking
 from cherrypy.lib import is_iterator
 
 
-if six.PY2:
-    FileNotFoundError = OSError
-
-
 missing = object()
 
 
 class Session(object):
-
     """A CherryPy dict-like Session object (one per request)."""
 
     _id = None
@@ -155,9 +147,11 @@ class Session(object):
     to session data."""
 
     loaded = False
+    """If True, data has been retrieved from storage.
+
+    This should happen automatically on the first attempt to access
+    session data.
     """
-    If True, data has been retrieved from storage. This should happen
-    automatically on the first attempt to access session data."""
 
     clean_thread = None
     'Class-level Monitor which calls self.clean_up.'
@@ -172,9 +166,10 @@ class Session(object):
     'True if the session requested by the client did not exist.'
 
     regenerated = False
+    """True if the application called session.regenerate().
+
+    This is not set by internal calls to regenerate the session id.
     """
-    True if the application called session.regenerate(). This is not set by
-    internal calls to regenerate the session id."""
 
     debug = False
     'If True, log debug information.'
@@ -342,8 +337,9 @@ class Session(object):
 
     def pop(self, key, default=missing):
         """Remove the specified key and return the corresponding value.
-        If key is not found, default is returned if given,
-        otherwise KeyError is raised.
+
+        If key is not found, default is returned if given, otherwise
+        KeyError is raised.
         """
         if not self.loaded:
             self.load()
@@ -358,13 +354,19 @@ class Session(object):
         return key in self._data
 
     def get(self, key, default=None):
-        """D.get(k[,d]) -> D[k] if k in D, else d.  d defaults to None."""
+        """D.get(k[,d]) -> D[k] if k in D, else d.
+
+        d defaults to None.
+        """
         if not self.loaded:
             self.load()
         return self._data.get(key, default)
 
     def update(self, d):
-        """D.update(E) -> None.  Update D from E: for k in E: D[k] = E[k]."""
+        """D.update(E) -> None.
+
+        Update D from E: for k in E: D[k] = E[k].
+        """
         if not self.loaded:
             self.load()
         self._data.update(d)
@@ -376,7 +378,10 @@ class Session(object):
         return self._data.setdefault(key, default)
 
     def clear(self):
-        """D.clear() -> None.  Remove all items from D."""
+        """D.clear() -> None.
+
+        Remove all items from D.
+        """
         if not self.loaded:
             self.load()
         self._data.clear()
@@ -410,7 +415,7 @@ class RamSession(Session):
         """Clean up expired sessions."""
 
         now = self.now()
-        for _id, (data, expiration_time) in list(six.iteritems(self.cache)):
+        for _id, (data, expiration_time) in self.cache.copy().items():
             if expiration_time <= now:
                 try:
                     del self.cache[_id]
@@ -499,7 +504,8 @@ class FileSession(Session):
         """Set up the storage system for file-based sessions.
 
         This should only be called once per process; this will be done
-        automatically when using sessions.init (as the built-in Tool does).
+        automatically when using sessions.init (as the built-in Tool
+        does).
         """
         # The 'storage_path' arg is required for file-based sessions.
         kwargs['storage_path'] = os.path.abspath(kwargs['storage_path'])
@@ -523,11 +529,8 @@ class FileSession(Session):
         if path is None:
             path = self._get_file_path()
         try:
-            f = open(path, 'rb')
-            try:
+            with open(path, 'rb') as f:
                 return pickle.load(f)
-            finally:
-                f.close()
         except (IOError, EOFError):
             e = sys.exc_info()[1]
             if self.debug:
@@ -538,11 +541,8 @@ class FileSession(Session):
     def _save(self, expiration_time):
         assert self.locked, ('The session was saved without being locked.  '
                              "Check your tools' priority levels.")
-        f = open(self._get_file_path(), 'wb')
-        try:
+        with open(self._get_file_path(), 'wb') as f:
             pickle.dump((self._data, expiration_time), f, self.pickle_protocol)
-        finally:
-            f.close()
 
     def _delete(self):
         assert self.locked, ('The session deletion without being locked.  '
@@ -572,8 +572,6 @@ class FileSession(Session):
     def release_lock(self, path=None):
         """Release the lock on the currently-loaded session data."""
         self.lock.close()
-        with contextlib2.suppress(FileNotFoundError):
-            os.remove(self.lock._path)
         self.locked = False
 
     def clean_up(self):
@@ -624,14 +622,15 @@ class MemcachedSession(Session):
     # This is a separate set of locks per session id.
     locks = {}
 
-    servers = ['127.0.0.1:11211']
+    servers = ['localhost:11211']
 
     @classmethod
     def setup(cls, **kwargs):
         """Set up the storage system for memcached-based sessions.
 
         This should only be called once per process; this will be done
-        automatically when using sessions.init (as the built-in Tool does).
+        automatically when using sessions.init (as the built-in Tool
+        does).
         """
         for k, v in kwargs.items():
             setattr(cls, k, v)

@@ -13,20 +13,18 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import object
-
 import re
+import sqlite3
 
 import plexpy
-if plexpy.PYTHON2:
-    import database
-    import helpers
-    import logger
-else:
-    from plexpy import database
-    from plexpy import helpers
-    from plexpy import logger
+from plexpy import database
+from plexpy import helpers
+from plexpy import logger
+
+# COUNT(*) OVER () lets the filtered count ride along with the page query
+# so the (potentially expensive) inner query is materialized once per
+# draw instead of twice
+_WINDOW_FUNCTIONS_SUPPORTED = sqlite3.sqlite_version_info >= (3, 25, 0)
 
 
 class DataTables(object):
@@ -40,27 +38,48 @@ class DataTables(object):
     def ssp_query(self,
                   table_name=None,
                   table_name_union=None,
-                  columns=[],
-                  columns_union=[],
-                  custom_where=[],
-                  custom_where_union=[],
-                  group_by=[],
-                  group_by_union=[],
-                  join_types=[],
-                  join_tables=[],
-                  join_evals=[],
+                  columns=None,
+                  columns_union=None,
+                  custom_where=None,
+                  custom_where_union=None,
+                  group_by=None,
+                  group_by_union=None,
+                  join_types=None,
+                  join_tables=None,
+                  join_evals=None,
+                  filtered_count_query=None,
+                  filtered_count_args=None,
                   kwargs=None):
 
         if not table_name:
             logger.error('Tautulli DataTables :: No table name received.')
             return None
+        
+        if columns is None:
+            columns = []
+        if columns_union is None:
+            columns_union = []
+        if custom_where is None:
+            custom_where = []
+        if custom_where_union is None:
+            custom_where_union = []
+        if group_by is None:
+            group_by = []
+        if group_by_union is None:
+            group_by_union = []
+        if join_types is None:
+            join_types = []
+        if join_tables is None:
+            join_tables = []
+        if join_evals is None:
+            join_evals = []
 
         # Fetch all our parameters
         if kwargs.get('json_data'):
             parameters = helpers.process_json_kwargs(json_kwargs=kwargs.get('json_data'))
         else:
-            logger.error('Tautulli DataTables :: Parameters for Datatables must be sent as a serialised json object '
-                         'named json_data.')
+            logger.warn('Tautulli DataTables :: Parameters for Datatables must be sent as a serialised json object '
+                        'named json_data.')
             return None
 
         extracted_columns = extract_columns(columns=columns)
@@ -79,46 +98,87 @@ class DataTables(object):
             extracted_columns_union = extract_columns(columns=columns_union)
             group_u = build_grouping(group_by_union)
             c_where_u, cwu_args = build_custom_where(custom_where_union)
-            union = 'UNION SELECT %s FROM %s %s %s' % (extracted_columns_union['column_string'],
-                                                       table_name_union,
-                                                       c_where_u,
-                                                       group_u)
+            union = 'UNION ALL SELECT %s FROM %s %s %s' % (extracted_columns_union['column_string'],
+                                                           table_name_union,
+                                                           c_where_u,
+                                                           group_u)
         else:
             union = ''
             cwu_args = []
 
         args = cw_args + cwu_args + w_args
 
-        # Build the query
-        query = 'SELECT * FROM (SELECT %s FROM %s %s %s %s %s) %s %s' \
-                % (extracted_columns['column_string'], table_name, join, c_where, group, union, where, order)
+        # Build the inner query
+        inner_query = 'SELECT %s FROM %s %s %s %s %s' \
+                      % (extracted_columns['column_string'], table_name, join, c_where, group, union)
 
-        # logger.debug("Query: %s" % query)
+        # Paginate using LIMIT and OFFSET so only the requested page is
+        # fetched from the database (LIMIT -1 returns all rows in SQLite)
+        start = helpers.cast_to_int(parameters.get('start', 0))
+        length = helpers.cast_to_int(parameters.get('length', -1))
+        if length < 0:
+            length = -1
 
-        # Execute the query
-        filtered = self.ssp_db.select(query, args=args)
+        if filtered_count_query and not where:
+            # The caller supplied an equivalent cheap count (e.g. group
+            # keys counted on the base tables without the 1:1 joins);
+            # valid whenever no search filter is active
+            filtered_count = self.ssp_db.select(
+                filtered_count_query, args=filtered_count_args or [])[0]['filtered_count']
+
+            query = 'SELECT * FROM (%s) %s %s LIMIT ? OFFSET ?' % (inner_query, where, order)
+            result = self.ssp_db.select(query, args=args + [length, start])
+        elif _WINDOW_FUNCTIONS_SUPPORTED:
+            # Compute the filtered count in the same statement as the page
+            query = 'SELECT *, COUNT(*) OVER () AS __filtered_count FROM (%s) %s %s LIMIT ? OFFSET ?' \
+                    % (inner_query, where, order)
+            result = self.ssp_db.select(query, args=args + [length, start])
+
+            if result:
+                filtered_count = result[0]['__filtered_count']
+                for row in result:
+                    del row['__filtered_count']
+            elif start > 0:
+                # Page requested beyond the end of the result set; only
+                # now pay for a separate count
+                filtered_count = self.ssp_db.select(
+                    'SELECT COUNT(*) AS filtered_count FROM (%s) %s' % (inner_query, where),
+                    args=args)[0]['filtered_count']
+            else:
+                filtered_count = 0
+        else:
+            # Get the number of filtered rows
+            filtered_count = self.ssp_db.select(
+                'SELECT COUNT(*) AS filtered_count FROM (%s) %s' % (inner_query, where),
+                args=args)[0]['filtered_count']
+
+            # Build the query
+            query = 'SELECT * FROM (%s) %s %s LIMIT ? OFFSET ?' % (inner_query, where, order)
+
+            # Execute the query
+            result = self.ssp_db.select(query, args=args + [length, start])
 
         # Remove NULL rows
-        filtered = [row for row in filtered if not all(v is None for v in row.values())]
+        result = [row for row in result if not all(v is None for v in row.values())]
 
         # Build grand totals
-        totalcount = self.ssp_db.select('SELECT COUNT(id) as total_count from %s' % table_name)[0]['total_count']
+        totalcount = self.ssp_db.select('SELECT COUNT(*) as total_count from %s' % table_name)[0]['total_count']
 
         # Get draw counter
         draw_counter = int(parameters['draw'])
 
-        # Paginate results
-        result = filtered[parameters['start']:(parameters['start'] + parameters['length'])]
-
         output = {'result': result,
                   'draw': draw_counter,
-                  'filteredCount': len(filtered),
+                  'filteredCount': filtered_count,
                   'totalCount': totalcount}
 
         return output
 
 
-def build_grouping(group_by=[]):
+def build_grouping(group_by=None):
+    if group_by is None:
+        group_by = []
+
     # Build grouping
     group = ''
 
@@ -130,7 +190,14 @@ def build_grouping(group_by=[]):
     return group
 
 
-def build_join(join_types=[], join_tables=[], join_evals=[]):
+def build_join(join_types=None, join_tables=None, join_evals=None):
+    if join_types is None:
+        join_types = []
+    if join_tables is None:
+        join_tables = []
+    if join_evals is None:
+        join_evals = []
+
     # Build join parameters
     join = ''
 
@@ -143,23 +210,46 @@ def build_join(join_types=[], join_tables=[], join_evals=[]):
     return join
 
 
-def build_custom_where(custom_where=[]):
+def build_custom_where(custom_where=None):
+    if custom_where is None:
+        custom_where = []
+
     # Build custom where parameters
     c_where = ''
     args = []
 
-    for w in custom_where:
-        and_or = ' OR ' if w[0].endswith('OR') else ' AND '
+    # The loop strips the OR markers, so work on a copy. Callers reuse the list.
+    custom_where = [list(w) for w in custom_where]
+
+    # Adjacent OR columns are one filter. Brackets AND it with the other filters.
+    is_or = [w[0].endswith('OR') for w in custom_where] + [False]
+
+    for i, w in enumerate(custom_where):
+        and_or = ' AND '
+        if is_or[i]:
+            if i == 0 or not is_or[i - 1]:
+                c_where += '('
+            and_or = ' OR ' if is_or[i + 1] else ') AND '
         w[0] = w[0].rstrip(' OR')
 
-        if isinstance(w[1], (list, tuple)) and len(w[1]):
+        if '?' in w[0]:
+            # The condition already carries its own placeholders
+            c_where += w[0] + and_or
+            args += w[1] if isinstance(w[1], (list, tuple)) else [w[1]]
+        elif w[0].endswith(' IN') and isinstance(w[1], (list, tuple)):
+            c_where += w[0] + ' (' + ','.join(['?'] * len(w[1])) + ')' + and_or
+            args += w[1]
+        elif isinstance(w[1], (list, tuple)) and len(w[1]):
             c_where += '('
             for w_ in w[1]:
                 if w_ is None:
                     c_where += w[0] + ' IS NULL'
-                elif str(w_).startswith('LIKE '):
-                    c_where += w[0] + ' LIKE ?'
-                    args.append(w_[5:])
+                elif w[0].endswith(' LIKE'):
+                    c_where += w[0] + ' ?'
+                    args.append(w_)
+                elif w[0].endswith('<') or w[0].endswith('>'):
+                    c_where += w[0] + '= ?'
+                    args.append(w_)
                 else:
                     c_where += w[0] + ' = ?'
                     args.append(w_)
@@ -168,9 +258,12 @@ def build_custom_where(custom_where=[]):
         else:
             if w[1] is None:
                 c_where += w[0] + ' IS NULL'
-            elif str(w[1]).startswith('LIKE '):
-                c_where += w[0] + ' LIKE ?'
-                args.append(w[1][5:])
+            elif w[0].endswith(' LIKE'):
+                c_where += w[0] + ' ?'
+                args.append(w[1])
+            elif w[0].endswith('<') or w[0].endswith('>'):
+                c_where += w[0] + '= ?'
+                args.append(w[1])
             else:
                 c_where += w[0] + ' = ?'
                 args.append(w[1])
@@ -183,7 +276,14 @@ def build_custom_where(custom_where=[]):
     return c_where, args
 
 
-def build_order(order_param=[], columns=[], dt_columns=[]):
+def build_order(order_param=None, columns=None, dt_columns=None):
+    if order_param is None:
+        order_param = []
+    if columns is None:
+        columns = []
+    if dt_columns is None:
+        dt_columns = []
+
     # Build ordering
     order = ''
 
@@ -211,7 +311,12 @@ def build_order(order_param=[], columns=[], dt_columns=[]):
     return order
 
 
-def build_where(search_param='', columns=[], dt_columns=[]):
+def build_where(search_param='', columns=None, dt_columns=None):
+    if columns is None:
+        columns = []
+    if dt_columns is None:
+        dt_columns = []
+
     # Build where parameters
     where = ''
     args = []
@@ -285,7 +390,7 @@ def extract_columns(columns=None, match_columns=None):
     columns_string = columns_string.rstrip(', ')
 
     # We return a dict of the column params
-    # column_string is a comma seperated list of the exact column variables received.
+    # column_string is a comma separated list of the exact column variables received.
     # column_literal is the text before the "as" if we have an "as". Usually a function.
     # column_named is the text after the "as", if we have an "as". Any table prefix is also stripped off.
     #   We use this to match with columns received from the Datatables request.

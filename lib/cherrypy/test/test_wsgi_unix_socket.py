@@ -2,8 +2,7 @@ import os
 import socket
 import atexit
 import tempfile
-
-from six.moves.http_client import HTTPConnection
+from http.client import HTTPConnection
 
 import pytest
 
@@ -22,9 +21,7 @@ USOCKET_PATH = usocket_path()
 
 
 class USocketHTTPConnection(HTTPConnection):
-    """
-    HTTPConnection over a unix socket.
-    """
+    """HTTPConnection over a unix socket."""
 
     def __init__(self, path):
         HTTPConnection.__init__(self, 'localhost')

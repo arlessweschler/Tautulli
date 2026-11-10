@@ -1,12 +1,13 @@
-# -*- coding: utf-8 -*-
 import logging
 import os
 from logging.handlers import RotatingFileHandler
 from platform import uname
 from uuid import getnode
 
+import plexapi.const as const
+import plexapi.utils as utils
 from plexapi.config import PlexConfig, reset_base_headers
-from plexapi.utils import SecretsFilter
+from plexapi.utils import SecretsFilter, setDatetimeTimezone
 
 # Load User Defined Config
 DEFAULT_CONFIG_PATH = os.path.expanduser('~/.config/plexapi/config.ini')
@@ -15,20 +16,23 @@ CONFIG = PlexConfig(CONFIG_PATH)
 
 # PlexAPI Settings
 PROJECT = 'PlexAPI'
-VERSION = '4.5.2'
+VERSION = __version__ = const.__version__
 TIMEOUT = CONFIG.get('plexapi.timeout', 30, int)
+setDatetimeTimezone(CONFIG.get('plexapi.timezone', False))
+
 X_PLEX_CONTAINER_SIZE = CONFIG.get('plexapi.container_size', 100, int)
 X_PLEX_ENABLE_FAST_CONNECT = CONFIG.get('plexapi.enable_fast_connect', False, bool)
 
-# Plex Header Configuation
+# Plex Header Configuration
 X_PLEX_PROVIDES = CONFIG.get('header.provides', 'controller')
-X_PLEX_PLATFORM = CONFIG.get('header.platform', CONFIG.get('header.platorm', uname()[0]))
+X_PLEX_PLATFORM = CONFIG.get('header.platform', uname()[0])
 X_PLEX_PLATFORM_VERSION = CONFIG.get('header.platform_version', uname()[2])
 X_PLEX_PRODUCT = CONFIG.get('header.product', PROJECT)
 X_PLEX_VERSION = CONFIG.get('header.version', VERSION)
 X_PLEX_DEVICE = CONFIG.get('header.device', X_PLEX_PLATFORM)
 X_PLEX_DEVICE_NAME = CONFIG.get('header.device_name', uname()[1])
 X_PLEX_IDENTIFIER = CONFIG.get('header.identifier', str(hex(getnode())))
+X_PLEX_LANGUAGE = CONFIG.get('header.language', 'en')
 BASE_HEADERS = reset_base_headers()
 
 # Logging Configuration
@@ -49,3 +53,10 @@ log.setLevel(loglevel)
 logfilter = SecretsFilter()
 if CONFIG.get('log.show_secrets', '').lower() != 'true':
     log.addFilter(logfilter)
+
+
+def __getattr__(name):
+    """ Dynamic module attribute access for aliased values. """
+    if name == 'DATETIME_TIMEZONE':
+        return utils.DATETIME_TIMEZONE
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

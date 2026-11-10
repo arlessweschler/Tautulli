@@ -1,5 +1,5 @@
 # mako/template.py
-# Copyright 2006-2020 the Mako authors and contributors <see AUTHORS file>
+# Copyright 2006-2026 the Mako authors and contributors <see AUTHORS file>
 #
 # This module is part of Mako and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -7,27 +7,31 @@
 """Provides the Template class, a facade for parsing, generating and executing
 template strings, as well as template runtime operations."""
 
+import contextlib
+from importlib import abc
+from importlib import machinery
 import json
 import os
+import posixpath
 import re
 import shutil
 import stat
-import sys
 import tempfile
 import types
+import warnings
 import weakref
 
 from mako import cache
 from mako import codegen
 from mako import compat
 from mako import exceptions
+from mako import pyparser
 from mako import runtime
 from mako import util
 from mako.lexer import Lexer
 
 
-class Template(object):
-
+class Template:
     r"""Represents a compiled template.
 
     :class:`.Template` includes a reference to the original
@@ -53,17 +57,6 @@ class Template(object):
      creation of default expression filters that let the output
      of return-valued ``%def``\ s "opt out" of that filtering via
      passing special attributes or objects.
-
-    :param bytestring_passthrough: When ``True``, and ``output_encoding`` is
-     set to ``None``, and :meth:`.Template.render` is used to render,
-     the `StringIO` or `cStringIO` buffer will be used instead of the
-     default "fast" buffer.   This allows raw bytestrings in the
-     output stream, such as in expressions, to pass straight
-     through to the buffer.  This flag is forced
-     to ``True`` if ``disable_unicode`` is also configured.
-
-     .. versionadded:: 0.4
-        Added to provide the same behavior as that of the previous series.
 
     :param cache_args: Dictionary of cache configuration arguments that
      will be passed to the :class:`.CacheImpl`.   See :ref:`caching_toplevel`.
@@ -94,9 +87,6 @@ class Template(object):
 
     :param default_filters: List of string filter names that will
      be applied to all expressions.  See :ref:`filtering_default_filters`.
-
-    :param disable_unicode: Disables all awareness of Python Unicode
-     objects.  See :ref:`unicode_disabled`.
 
     :param enable_loop: When ``True``, enable the ``loop`` context variable.
      This can be set to ``False`` to support templates that may
@@ -135,11 +125,7 @@ class Template(object):
     :param future_imports: String list of names to import from `__future__`.
      These will be concatenated into a comma-separated string and inserted
      into the beginning of the template, e.g. ``futures_imports=['FOO',
-     'BAR']`` results in ``from __future__ import FOO, BAR``.  If you're
-     interested in using features like the new division operator, you must
-     use future_imports to convey that to the renderer, as otherwise the
-     import will not appear as the first executed statement in the generated
-     code and will therefore not have the desired effect.
+     'BAR']`` results in ``from __future__ import FOO, BAR``.
 
     :param include_error_handler: An error handler that runs when this template
      is included within another one via the ``<%include>`` tag, and raises an
@@ -256,9 +242,7 @@ class Template(object):
         cache_url=None,
         module_filename=None,
         input_encoding=None,
-        disable_unicode=False,
         module_writer=None,
-        bytestring_passthrough=False,
         default_filters=None,
         buffer_filters=(),
         strict_undefined=False,
@@ -281,10 +265,13 @@ class Template(object):
             self.module_id = "memory:" + hex(id(self))
             self.uri = self.module_id
 
-        u_norm = self.uri
-        if u_norm.startswith("/"):
-            u_norm = u_norm[1:]
-        u_norm = os.path.normpath(u_norm)
+        u_norm = self.uri.replace("\\", "/").lstrip("/")
+        # use posixpath, not os.path, to normalize; this is the same
+        # module used by TemplateLookup to resolve the URI to a file,
+        # and unlike ntpath it has no notion of a drive designator, so
+        # a URI like "C:/../../secret.txt" retains its ".." segments
+        # here rather than having them absorbed into a drive root.
+        u_norm = posixpath.normpath(u_norm)
         if u_norm.startswith(".."):
             raise exceptions.TemplateLookupException(
                 'Template uri "%s" is invalid - '
@@ -295,26 +282,12 @@ class Template(object):
         self.input_encoding = input_encoding
         self.output_encoding = output_encoding
         self.encoding_errors = encoding_errors
-        self.disable_unicode = disable_unicode
-        self.bytestring_passthrough = bytestring_passthrough or disable_unicode
         self.enable_loop = enable_loop
         self.strict_undefined = strict_undefined
         self.module_writer = module_writer
 
-        if compat.py3k and disable_unicode:
-            raise exceptions.UnsupportedError(
-                "Mako for Python 3 does not " "support disabling Unicode"
-            )
-        elif output_encoding and disable_unicode:
-            raise exceptions.UnsupportedError(
-                "output_encoding must be set to "
-                "None when disable_unicode is used."
-            )
         if default_filters is None:
-            if compat.py3k or self.disable_unicode:
-                self.default_filters = ["str"]
-            else:
-                self.default_filters = ["unicode"]
+            self.default_filters = ["str"]
         else:
             self.default_filters = default_filters
         self.buffer_filters = buffer_filters
@@ -328,7 +301,7 @@ class Template(object):
 
         # if plain text, compile code in memory only
         if text is not None:
-            (code, module) = _compile_text(self, text, filename)
+            code, module = _compile_text(self, text, filename)
             self._code = code
             self._source = text
             ModuleInfo(module, None, self, filename, code, text, uri)
@@ -388,11 +361,7 @@ class Template(object):
     ):
         self.cache_impl = cache_impl
         self.cache_enabled = cache_enabled
-        if cache_args:
-            self.cache_args = cache_args
-        else:
-            self.cache_args = {}
-
+        self.cache_args = cache_args or {}
         # transfer deprecated cache_* args
         if cache_type:
             self.cache_args["type"] = cache_type
@@ -405,23 +374,27 @@ class Template(object):
         if path is not None:
             util.verify_directory(os.path.dirname(path))
             filemtime = os.stat(filename)[stat.ST_MTIME]
-            if (
-                not os.path.exists(path)
-                or os.stat(path)[stat.ST_MTIME] < filemtime
+            with _translate_module_warnings(
+                lambda: util.read_python_file(path), path, filename
             ):
-                data = util.read_file(filename)
-                _compile_module_file(
-                    self, data, filename, path, self.module_writer
-                )
-            module = compat.load_module(self.module_id, path)
-            del sys.modules[self.module_id]
-            if module._magic_number != codegen.MAGIC_NUMBER:
-                data = util.read_file(filename)
-                _compile_module_file(
-                    self, data, filename, path, self.module_writer
-                )
+                if (
+                    not os.path.exists(path)
+                    or os.stat(path)[stat.ST_MTIME] < filemtime
+                ):
+                    data = util.read_file(filename)
+                    with _drop_expression_warnings():
+                        _compile_module_file(
+                            self, data, filename, path, self.module_writer
+                        )
                 module = compat.load_module(self.module_id, path)
-                del sys.modules[self.module_id]
+                if module._magic_number != codegen.MAGIC_NUMBER:
+                    data = util.read_file(filename)
+                    with _drop_expression_warnings():
+                        _compile_module_file(
+                            self, data, filename, path, self.module_writer
+                        )
+                    module = compat.load_module(self.module_id, path)
+
             ModuleInfo(module, path, self, filename, None, None, None)
         else:
             # template filename and no module directory, compile code
@@ -466,7 +439,7 @@ class Template(object):
 
         If the template specifies an output encoding, the string
         will be encoded accordingly, else the output is raw (raw
-        output uses `cStringIO` and can't handle multibyte
+        output uses `StringIO` and can't handle multibyte
         characters). A :class:`.Context` object is created corresponding
         to the given data. Arguments that are explicitly declared
         by this template's internal rendering method are also
@@ -517,20 +490,19 @@ class Template(object):
 
 
 class ModuleTemplate(Template):
-
     """A Template which is constructed given an existing Python module.
 
-       e.g.::
+    e.g.::
 
-            t = Template("this is a template")
-            f = file("mymodule.py", "w")
-            f.write(t.code)
-            f.close()
+         t = Template("this is a template")
+         f = file("mymodule.py", "w")
+         f.write(t.code)
+         f.close()
 
-            import mymodule
+         import mymodule
 
-            t = ModuleTemplate(mymodule)
-            print(t.render())
+         t = ModuleTemplate(mymodule)
+         print(t.render())
 
     """
 
@@ -544,8 +516,6 @@ class ModuleTemplate(Template):
         template_source=None,
         output_encoding=None,
         encoding_errors="strict",
-        disable_unicode=False,
-        bytestring_passthrough=False,
         format_exceptions=False,
         error_handler=None,
         lookup=None,
@@ -562,19 +532,7 @@ class ModuleTemplate(Template):
         self.input_encoding = module._source_encoding
         self.output_encoding = output_encoding
         self.encoding_errors = encoding_errors
-        self.disable_unicode = disable_unicode
-        self.bytestring_passthrough = bytestring_passthrough or disable_unicode
         self.enable_loop = module._enable_loop
-
-        if compat.py3k and disable_unicode:
-            raise exceptions.UnsupportedError(
-                "Mako for Python 3 does not " "support disabling Unicode"
-            )
-        elif output_encoding and disable_unicode:
-            raise exceptions.UnsupportedError(
-                "output_encoding must be set to "
-                "None when disable_unicode is used."
-            )
 
         self.module = module
         self.filename = template_filename
@@ -604,7 +562,6 @@ class ModuleTemplate(Template):
 
 
 class DefTemplate(Template):
-
     """A :class:`.Template` which represents a callable def in a parent
     template."""
 
@@ -619,19 +576,17 @@ class DefTemplate(Template):
         self.include_error_handler = parent.include_error_handler
         self.enable_loop = parent.enable_loop
         self.lookup = parent.lookup
-        self.bytestring_passthrough = parent.bytestring_passthrough
 
     def get_def(self, name):
         return self.parent.get_def(name)
 
 
-class ModuleInfo(object):
-
+class ModuleInfo:
     """Stores information about a module currently loaded into
     memory, provides reverse lookups of template source, module
     source code based on a module's identifier.
 
-     """
+    """
 
     _modules = weakref.WeakValueDictionary()
 
@@ -661,9 +616,9 @@ class ModuleInfo(object):
             r"__M_BEGIN_METADATA(.+?)__M_END_METADATA", module_source, re.S
         ).group(1)
         source_map = json.loads(source_map)
-        source_map["line_map"] = dict(
-            (int(k), int(v)) for k, v in source_map["line_map"].items()
-        )
+        source_map["line_map"] = {
+            int(k): int(v) for k, v in source_map["line_map"].items()
+        }
         if full_line_map:
             f_line_map = source_map["full_line_map"] = []
             line_map = source_map["line_map"]
@@ -684,28 +639,25 @@ class ModuleInfo(object):
 
     @property
     def source(self):
-        if self.template_source is not None:
-            if self.module._source_encoding and not isinstance(
-                self.template_source, compat.text_type
-            ):
-                return self.template_source.decode(
-                    self.module._source_encoding
-                )
-            else:
-                return self.template_source
-        else:
+        if self.template_source is None:
             data = util.read_file(self.template_filename)
             if self.module._source_encoding:
                 return data.decode(self.module._source_encoding)
             else:
                 return data
 
+        elif self.module._source_encoding and not isinstance(
+            self.template_source, str
+        ):
+            return self.template_source.decode(self.module._source_encoding)
+        else:
+            return self.template_source
+
 
 def _compile(template, text, filename, generate_magic_comment):
     lexer = template.lexer_cls(
         text,
         filename,
-        disable_unicode=template.disable_unicode,
         input_encoding=template.input_encoding,
         preprocessor=template.preprocessor,
     )
@@ -720,7 +672,6 @@ def _compile(template, text, filename, generate_magic_comment):
         future_imports=template.future_imports,
         source_encoding=lexer.encoding,
         generate_magic_comment=generate_magic_comment,
-        disable_unicode=template.disable_unicode,
         strict_undefined=template.strict_undefined,
         enable_loop=template.enable_loop,
         reserved_names=template.reserved_names,
@@ -728,23 +679,158 @@ def _compile(template, text, filename, generate_magic_comment):
     return source, lexer
 
 
+class _ModuleSourceLoader(abc.Loader):
+    """Provide the generated source of an in-memory template module.
+
+    A module created directly from :class:`types.ModuleType` has ``__spec__``
+    and ``__loader__`` present in its namespace but set to ``None``.  The
+    :mod:`linecache` module consults these while a traceback is being built,
+    and as of Python 3.15 emits a :class:`DeprecationWarning` when it finds a
+    ``__spec__`` that has no loader; a module lacking a real loader also has
+    no source lines available to show for its frames.  Supplying a loader
+    that can produce the generated module source addresses both.
+
+    """
+
+    def __init__(self, name, source):
+        self.name = name
+        self._source = source
+
+    def get_source(self, name):
+        return self._source
+
+    def is_package(self, name):
+        return False
+
+
+@contextlib.contextmanager
+def _show_warnings_as(locate):
+    """Replace the warnings display hook for the duration of the block.
+
+    ``locate`` is passed the message, category, filename and line number of
+    each warning, and returns the filename and line number it should be
+    shown as, or ``None`` for a warning that should not be shown at all.
+
+    The display hook is replaced, rather than the warnings being recorded
+    and raised a second time, so that each warning passes through the
+    warnings filters exactly once.  A filter with a stateful action such as
+    "once" would otherwise suppress the second occurrence, and the warning
+    would be lost entirely.
+
+    """
+
+    show_warning = warnings.showwarning
+
+    def _show(message, category, filename, lineno, file=None, line=None):
+        location = locate(message, category, filename, lineno)
+        if location is None:
+            return
+
+        if location != (filename, lineno):
+            # the source line, if given, is that of the original location;
+            # allow it to be looked up again for the new one
+            line = None
+            filename, lineno = location
+
+        show_warning(message, category, filename, lineno, file, line)
+
+    warnings.showwarning = _show
+    try:
+        yield
+    finally:
+        warnings.showwarning = show_warning
+
+
+def _drop_expression_warnings():
+    """Drop warnings raised while individual expressions are parsed.
+
+    These carry no location that can be related back to the template, as the
+    expression is parsed on its own, and the same warning is raised again
+    when the module as a whole is compiled, where the location can be
+    translated.
+
+    """
+
+    def _locate(message, category, filename, lineno):
+        if filename != pyparser.EXPRESSION_FILENAME:
+            return filename, lineno
+
+        # a "once" filter records the warning globally as it is passed
+        # over, so remove that record, else the occurrence that can be
+        # translated would be suppressed
+        warnings.onceregistry.pop((str(message), category), None)
+        return None
+
+    return _show_warnings_as(_locate)
+
+
+def _translate_module_warnings(get_source, module_id, filename):
+    """Report warnings raised for a generated module against the template
+    it was generated from, translating the line number through the module's
+    line map.
+
+    Any other warning, such as one raised by a module imported from a
+    ``<%! %>`` block as the template module executes, is shown unchanged, as
+    is one whose line cannot be translated.
+
+    """
+
+    line_map = None
+
+    def _locate(message, category, warning_filename, lineno):
+        nonlocal line_map
+
+        if warning_filename != module_id:
+            return warning_filename, lineno
+
+        if line_map is None:
+            try:
+                line_map = ModuleInfo.get_module_source_metadata(
+                    get_source(), full_line_map=True
+                )["full_line_map"]
+            except Exception:
+                # a module file that carries no usable metadata, having
+                # been written by some other means or damaged.  the warning
+                # is worth more than the translation is
+                line_map = []
+
+        try:
+            translated = line_map[lineno - 1]
+        except IndexError:
+            return warning_filename, lineno
+        else:
+            return filename, translated
+
+    return _show_warnings_as(_locate)
+
+
 def _compile_text(template, text, filename):
     identifier = template.module_id
-    source, lexer = _compile(
-        template,
-        text,
-        filename,
-        generate_magic_comment=template.disable_unicode,
-    )
 
     cid = identifier
-    if not compat.py3k and isinstance(cid, compat.text_type):
-        cid = cid.encode()
     module = types.ModuleType(cid)
-    code = compile(source, cid, "exec")
 
-    # this exec() works for 2.4->3.3.
-    exec(code, module.__dict__, module.__dict__)
+    with _drop_expression_warnings():
+        source, lexer = _compile(
+            template, text, filename, generate_magic_comment=False
+        )
+
+    loader = _ModuleSourceLoader(cid, source)
+    module.__loader__ = loader
+    module.__spec__ = machinery.ModuleSpec(cid, loader, origin=cid)
+
+    with _translate_module_warnings(
+        lambda: source, cid, filename or template.uri
+    ):
+        code = compile(source, cid, "exec")
+
+        # the module body, which is the code of any <%! %> blocks, is
+        # executed within the same block, so that a warning it raises is
+        # reported the same way here as it is when the template is loaded
+        # from a module file, where the import system compiles and executes
+        # the module as one step
+        exec(code, module.__dict__, module.__dict__)
+
     return (source, module)
 
 
@@ -753,7 +839,7 @@ def _compile_module_file(template, text, filename, outputpath, module_writer):
         template, text, filename, generate_magic_comment=True
     )
 
-    if isinstance(source, compat.text_type):
+    if isinstance(source, str):
         source = source.encode(lexer.encoding or "ascii")
 
     if module_writer:
@@ -762,7 +848,7 @@ def _compile_module_file(template, text, filename, outputpath, module_writer):
         # make tempfiles in the same location as the ultimate
         # location.   this ensures they're on the same filesystem,
         # avoiding synchronization issues.
-        (dest, name) = tempfile.mkstemp(dir=os.path.dirname(outputpath))
+        dest, name = tempfile.mkstemp(dir=os.path.dirname(outputpath))
 
         os.write(dest, source)
         os.close(dest)
@@ -770,10 +856,7 @@ def _compile_module_file(template, text, filename, outputpath, module_writer):
 
 
 def _get_module_info_from_callable(callable_):
-    if compat.py3k:
-        return _get_module_info(callable_.__globals__["__name__"])
-    else:
-        return _get_module_info(callable_.func_globals["__name__"])
+    return _get_module_info(callable_.__globals__["__name__"])
 
 
 def _get_module_info(filename):

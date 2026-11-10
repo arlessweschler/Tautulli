@@ -1,9 +1,7 @@
 """Checker for CherryPy sites and mounted apps."""
 import os
 import warnings
-
-import six
-from six.moves import builtins
+import builtins
 
 import cherrypy
 
@@ -70,14 +68,14 @@ class Checker(object):
 
     def check_site_config_entries_in_app_config(self):
         """Check for mounted Applications that have site-scoped config."""
-        for sn, app in six.iteritems(cherrypy.tree.apps):
+        for sn, app in cherrypy.tree.apps.items():
             if not isinstance(app, cherrypy.Application):
                 continue
 
             msg = []
-            for section, entries in six.iteritems(app.config):
+            for section, entries in app.config.items():
                 if section.startswith('/'):
-                    for key, value in six.iteritems(entries):
+                    for key, value in entries.items():
                         for n in ('engine.', 'server.', 'tree.', 'checker.'):
                             if key.startswith(n):
                                 msg.append('[%s] %s = %s' %
@@ -315,7 +313,10 @@ class Checker(object):
 
     # -------------------- Specific config warnings -------------------- #
     def check_localhost(self):
-        """Warn if any socket_host is 'localhost'. See #711."""
+        """Warn if any socket_host is 'localhost'.
+
+        See #711.
+        """
         for k, v in cherrypy.config.items():
             if k == 'server.socket_host' and v == 'localhost':
                 warnings.warn("The use of 'localhost' as a socket host can "
