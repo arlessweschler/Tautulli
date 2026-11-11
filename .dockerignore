@@ -5,6 +5,10 @@ contrib
 init-scripts
 package
 pylintrc
+snap
 *.md
 !CHANGELOG*.md
 start.bat
+tests
+pytest.ini
+requirements-dev.txt

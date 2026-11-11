@@ -13,34 +13,18 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import str
-
 import threading
 
 import plexpy
-if plexpy.PYTHON2:
-    import activity_handler
-    import activity_processor
-    import database
-    import helpers
-    import libraries
-    import logger
-    import notification_handler
-    import plextv
-    import pmsconnect
-    import web_socket
-else:
-    from plexpy import activity_handler
-    from plexpy import activity_processor
-    from plexpy import database
-    from plexpy import helpers
-    from plexpy import libraries
-    from plexpy import logger
-    from plexpy import notification_handler
-    from plexpy import plextv
-    from plexpy import pmsconnect
-    from plexpy import web_socket
+from plexpy import activity_handler
+from plexpy import activity_processor
+from plexpy import database
+from plexpy import helpers
+from plexpy import logger
+from plexpy import notification_handler
+from plexpy import plextv
+from plexpy import pmsconnect
+from plexpy import web_socket
 
 
 monitor_lock = threading.Lock()
@@ -80,41 +64,35 @@ def check_active_sessions(ws_request=False):
                             # Here we can check the play states
                             if session['state'] != stream['state']:
                                 if session['state'] == 'paused':
-                                    logger.debug("Tautulli Monitor :: Session %s paused." % stream['session_key'])
+                                    logger.info("Tautulli Monitor :: Session %s paused." % stream['session_key'])
 
                                     plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_pause'})
 
                                 if session['state'] == 'playing' and stream['state'] == 'paused':
-                                    logger.debug("Tautulli Monitor :: Session %s resumed." % stream['session_key'])
+                                    logger.info("Tautulli Monitor :: Session %s resumed." % stream['session_key'])
 
                                     plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_resume'})
 
+                                if session['state'] == 'buffering':
+                                    logger.info("Tautulli Monitor :: Session %s is buffering." % stream['session_key'])
+
                                 if session['state'] == 'error':
-                                    logger.debug("Tautulli Monitor :: Session %s encountered an error." % stream['session_key'])
+                                    logger.info("Tautulli Monitor :: Session %s encountered an error." % stream['session_key'])
 
                                     plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_error'})
-
-                            if stream['state'] == 'paused' and not ws_request:
-                                # The stream is still paused so we need to increment the paused_counter
-                                # Using the set config parameter as the interval, probably not the most accurate but
-                                # it will have to do for now. If it's a websocket request don't use this method.
-                                paused_counter = int(stream['paused_counter']) + plexpy.CONFIG.MONITORING_INTERVAL
-                                monitor_db.action('UPDATE sessions SET paused_counter = ? '
-                                                  'WHERE session_key = ? AND rating_key = ?',
-                                                  [paused_counter, stream['session_key'], stream['rating_key']])
 
                             if session['state'] == 'buffering' and plexpy.CONFIG.BUFFER_THRESHOLD > 0:
                                 # The stream is buffering so we need to increment the buffer_count
                                 # We're going just increment on every monitor ping,
                                 # would be difficult to keep track otherwise
-                                monitor_db.action('UPDATE sessions SET buffer_count = buffer_count + 1 '
-                                                  'WHERE session_key = ? AND rating_key = ?',
+                                monitor_db.action("UPDATE sessions SET buffer_count = buffer_count + 1 "
+                                                  "WHERE session_key = ? AND rating_key = ?",
                                                   [stream['session_key'], stream['rating_key']])
 
                                 # Check the current buffer count and last buffer to determine if we should notify
-                                buffer_values = monitor_db.select('SELECT buffer_count, buffer_last_triggered '
-                                                                  'FROM sessions '
-                                                                  'WHERE session_key = ? AND rating_key = ?',
+                                buffer_values = monitor_db.select("SELECT buffer_count, buffer_last_triggered "
+                                                                  "FROM sessions "
+                                                                  "WHERE session_key = ? AND rating_key = ?",
                                                                   [stream['session_key'], stream['rating_key']])
 
                                 if buffer_values[0]['buffer_count'] >= plexpy.CONFIG.BUFFER_THRESHOLD:
@@ -125,9 +103,9 @@ def check_active_sessions(ws_request=False):
                                         logger.info("Tautulli Monitor :: User '%s' has triggered a buffer warning."
                                                     % stream['user'])
                                         # Set the buffer trigger time
-                                        monitor_db.action('UPDATE sessions '
-                                                          'SET buffer_last_triggered = strftime("%s","now") '
-                                                          'WHERE session_key = ? AND rating_key = ?',
+                                        monitor_db.action("UPDATE sessions "
+                                                          "SET buffer_last_triggered = strftime('%s', 'now') "
+                                                          "WHERE session_key = ? AND rating_key = ?",
                                                           [stream['session_key'], stream['rating_key']])
 
                                         plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_buffer'})
@@ -139,9 +117,9 @@ def check_active_sessions(ws_request=False):
                                             logger.info("Tautulli Monitor :: User '%s' has triggered multiple buffer warnings."
                                                     % stream['user'])
                                             # Set the buffer trigger time
-                                            monitor_db.action('UPDATE sessions '
-                                                              'SET buffer_last_triggered = strftime("%s","now") '
-                                                              'WHERE session_key = ? AND rating_key = ?',
+                                            monitor_db.action("UPDATE sessions "
+                                                              "SET buffer_last_triggered = strftime('%s', 'now') "
+                                                              "WHERE session_key = ? AND rating_key = ?",
                                                               [stream['session_key'], stream['rating_key']])
 
                                             plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_buffer'})
@@ -161,18 +139,19 @@ def check_active_sessions(ws_request=False):
                                     session['media_type'] == 'episode' and progress_percent >= plexpy.CONFIG.TV_WATCHED_PERCENT or
                                     session['media_type'] == 'track' and progress_percent >= plexpy.CONFIG.MUSIC_WATCHED_PERCENT) \
                                     and not any(d['notify_action'] == 'on_watched' for d in notify_states):
+                                    logger.info("Tautulli Monitor :: Session %s watched." % stream['session_key'])
                                     plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_watched'})
 
                 else:
                     # The user has stopped playing a stream
                     if stream['state'] != 'stopped':
-                        logger.debug("Tautulli Monitor :: Session %s stopped." % stream['session_key'])
+                        logger.info("Tautulli Monitor :: Session %s stopped." % stream['session_key'])
 
                         if not stream['stopped']:
                             # Set the stream stop time
                             stream['stopped'] = helpers.timestamp()
-                            monitor_db.action('UPDATE sessions SET stopped = ?, state = ? '
-                                              'WHERE session_key = ? AND rating_key = ?',
+                            monitor_db.action("UPDATE sessions SET stopped = ?, state = ? "
+                                              "WHERE session_key = ? AND rating_key = ?",
                                               [stream['stopped'], 'stopped', stream['session_key'], stream['rating_key']])
 
                         progress_percent = helpers.get_percent(stream['view_offset'], stream['duration'])
@@ -181,6 +160,7 @@ def check_active_sessions(ws_request=False):
                             stream['media_type'] == 'episode' and progress_percent >= plexpy.CONFIG.TV_WATCHED_PERCENT or
                             stream['media_type'] == 'track' and progress_percent >= plexpy.CONFIG.MUSIC_WATCHED_PERCENT) \
                             and not any(d['notify_action'] == 'on_watched' for d in notify_states):
+                            logger.info("Tautulli Monitor :: Session %s watched." % stream['session_key'])
                             plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_watched'})
 
                         plexpy.NOTIFY_QUEUE.put({'stream_data': stream.copy(), 'notify_action': 'on_stop'})
@@ -189,7 +169,7 @@ def check_active_sessions(ws_request=False):
                     row_id = monitor_process.write_session_history(session=stream)
 
                     if row_id:
-                        # If session is written to the databaase successfully, remove the session from the session table
+                        # If session is written to the database successfully, remove the session from the session table
                         logger.debug("Tautulli Monitor :: Removing sessionKey %s ratingKey %s from session queue"
                                      % (stream['session_key'], stream['rating_key']))
                         monitor_process.delete_session(row_id=row_id)
@@ -214,45 +194,22 @@ def check_active_sessions(ws_request=False):
                 new_session = monitor_process.write_session(session)
 
                 if new_session:
-                    logger.debug("Tautulli Monitor :: Session %s started by user %s (%s) with ratingKey %s (%s)%s."
-                                 % (str(session['session_key']), str(session['user_id']), session['username'],
-                                    str(session['rating_key']), session['full_title'], '[Live TV]' if session['live'] else ''))
+                    logger.info("Tautulli Monitor :: Session %s started by user %s (%s) with ratingKey %s (%s)%s."
+                                % (str(session['session_key']), str(session['user_id']), session['username'],
+                                   str(session['rating_key']), session['full_title'], '[Live TV]' if session['live'] else ''))
 
         else:
             logger.debug("Tautulli Monitor :: Unable to read session list.")
 
 
 def connect_server(log=True, startup=False):
-    if plexpy.CONFIG.PMS_IS_CLOUD:
-        if log:
-            logger.info("Tautulli Monitor :: Checking for Plex Cloud server status...")
+    if log and not startup:
+        logger.info("Tautulli Monitor :: Attempting to reconnect Plex server...")
 
-        plex_tv = plextv.PlexTV()
-        status = plex_tv.get_cloud_server_status()
-
-        if status is True:
-            logger.info("Tautulli Monitor :: Plex Cloud server is active.")
-        elif status is False:
-            if log:
-                logger.info("Tautulli Monitor :: Plex Cloud server is sleeping.")
-        else:
-            if log:
-                logger.error("Tautulli Monitor :: Failed to retrieve Plex Cloud server status.")
-
-        if not status and startup:
-            web_socket.on_disconnect()
-
-    else:
-        status = True
-
-    if status:
-        if log and not startup:
-            logger.info("Tautulli Monitor :: Attempting to reconnect Plex server...")
-
-        try:
-            web_socket.start_thread()
-        except Exception as e:
-            logger.error("Websocket :: Unable to open connection: %s." % e)
+    try:
+        web_socket.start_thread()
+    except Exception as e:
+        logger.exception("Websocket :: Unable to open connection: %s." % e)
 
 
 def check_server_updates():
@@ -261,7 +218,7 @@ def check_server_updates():
         logger.info("Tautulli Monitor :: Checking for PMS updates...")
 
         plex_tv = plextv.PlexTV()
-        download_info = plex_tv.get_plex_downloads()
+        download_info = plex_tv.get_plex_update()
 
         if download_info:
             logger.info("Tautulli Monitor :: Current PMS version: %s", plexpy.CONFIG.PMS_VERSION)

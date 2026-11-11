@@ -1,49 +1,44 @@
 # mako/pyparser.py
-# Copyright 2006-2020 the Mako authors and contributors <see AUTHORS file>
+# Copyright 2006-2026 the Mako authors and contributors <see AUTHORS file>
 #
 # This module is part of Mako and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
 
-"""Handles parsing of Python code.
-
-Parsing to AST is done via _ast on Python > 2.5, otherwise the compiler
-module is used.
-"""
-
-import operator
+"""Handles parsing of Python code."""
 
 import _ast
+import operator
 
 from mako import _ast_util
 from mako import compat
 from mako import exceptions
-from mako import util
-from mako.compat import arg_stringname
 
-if compat.py3k:
-    # words that cannot be assigned to (notably
-    # smaller than the total keys in __builtins__)
-    reserved = set(["True", "False", "None", "print"])
+# words that cannot be assigned to (notably
+# smaller than the total keys in __builtins__)
+reserved = {"True", "False", "None", "print"}
 
-    # the "id" attribute on a function node
-    arg_id = operator.attrgetter("arg")
-else:
-    # words that cannot be assigned to (notably
-    # smaller than the total keys in __builtins__)
-    reserved = set(["True", "False", "None"])
+# the "id" attribute on a function node
+arg_id = operator.attrgetter("arg")
 
-    # the "id" attribute on a function node
-    arg_id = operator.attrgetter("id")
-
-util.restore__ast(_ast)
+# filename given to the compiler when an individual expression is parsed.
+# warnings raised against this name have no location that can be related
+# back to the template
+EXPRESSION_FILENAME = "<unknown>"
 
 
-def parse(code, mode="exec", **exception_kwargs):
-    """Parse an expression into AST"""
+def parse(code, mode="exec", lineno_offset=0, **exception_kwargs):
+    """Parse an expression into AST.
+
+    ``lineno_offset`` is the line within the template on which ``code``
+    begins, relative to the line given in ``exception_kwargs``.  It is used
+    to report a syntax error against the line it occurred on, rather than
+    against the start of the construct that contains it.
+
+    """
 
     try:
-        return _ast_util.parse(code, "<unknown>", mode)
-    except Exception:
+        return _ast_util.parse(code, EXPRESSION_FILENAME, mode)
+    except Exception as e:
         raise exceptions.SyntaxException(
             "(%s) %s (%r)"
             % (
@@ -51,8 +46,26 @@ def parse(code, mode="exec", **exception_kwargs):
                 compat.exception_as(),
                 code[0:50],
             ),
-            **exception_kwargs
-        )
+            **_adjust_lineno(e, lineno_offset, exception_kwargs),
+        ) from e
+
+
+def _adjust_lineno(exc, lineno_offset, exception_kwargs):
+    """Return ``exception_kwargs`` with the line of ``exc`` within the parsed
+    code applied to it.
+
+    """
+
+    lineno = exception_kwargs.get("lineno")
+    exc_lineno = getattr(exc, "lineno", None)
+
+    if lineno is None or exc_lineno is None:
+        return exception_kwargs
+
+    return {
+        **exception_kwargs,
+        "lineno": lineno + lineno_offset + exc_lineno - 1,
+    }
 
 
 class FindIdentifiers(_ast_util.NodeVisitor):
@@ -73,7 +86,6 @@ class FindIdentifiers(_ast_util.NodeVisitor):
         self._add_declared(node.name)
 
     def visit_Assign(self, node):
-
         # flip around the visiting of Assign so the expression gets
         # evaluated first, in the case of a clause like "x=x+5" (x
         # is undeclared)
@@ -85,18 +97,13 @@ class FindIdentifiers(_ast_util.NodeVisitor):
             self.visit(n)
         self.in_assign_targets = in_a
 
-    if compat.py3k:
-
-        # ExceptHandler is in Python 2, but this block only works in
-        # Python 3 (and is required there)
-
-        def visit_ExceptHandler(self, node):
-            if node.name is not None:
-                self._add_declared(node.name)
-            if node.type is not None:
-                self.visit(node.type)
-            for statement in node.body:
-                self.visit(statement)
+    def visit_ExceptHandler(self, node):
+        if node.name is not None:
+            self._add_declared(node.name)
+        if node.type is not None:
+            self.visit(node.type)
+        for statement in node.body:
+            self.visit(statement)
 
     def visit_Lambda(self, node, *args):
         self._visit_function(node, True)
@@ -105,16 +112,32 @@ class FindIdentifiers(_ast_util.NodeVisitor):
         self._add_declared(node.name)
         self._visit_function(node, False)
 
+    def visit_ListComp(self, node):
+        if self.in_function:
+            for comp in node.generators:
+                self.visit(comp.target)
+                self.visit(comp.iter)
+        else:
+            self.generic_visit(node)
+
+    visit_SetComp = visit_GeneratorExp = visit_ListComp
+
+    def visit_DictComp(self, node):
+        if self.in_function:
+            for comp in node.generators:
+                self.visit(comp.target)
+                self.visit(comp.iter)
+        else:
+            self.generic_visit(node)
+
     def _expand_tuples(self, args):
         for arg in args:
             if isinstance(arg, _ast.Tuple):
-                for n in arg.elts:
-                    yield n
+                yield from arg.elts
             else:
                 yield arg
 
     def _visit_function(self, node, islambda):
-
         # push function state onto stack.  dont log any more
         # identifiers as "declared" until outside of the function,
         # but keep logging identifiers as "undeclared". track
@@ -137,7 +160,6 @@ class FindIdentifiers(_ast_util.NodeVisitor):
         self.local_ident_stack = local_ident_stack
 
     def visit_For(self, node):
-
         # flip around visit
 
         self.visit(node.iter)
@@ -170,15 +192,15 @@ class FindIdentifiers(_ast_util.NodeVisitor):
         for name in node.names:
             if name.asname is not None:
                 self._add_declared(name.asname)
+            elif name.name == "*":
+                raise exceptions.CompileException(
+                    "'import *' is not supported, since all identifier "
+                    "names must be explicitly declared.  Please use the "
+                    "form 'from <modulename> import <name1>, <name2>, "
+                    "...' instead.",
+                    **self.exception_kwargs,
+                )
             else:
-                if name.name == "*":
-                    raise exceptions.CompileException(
-                        "'import *' is not supported, since all identifier "
-                        "names must be explicitly declared.  Please use the "
-                        "form 'from <modulename> import <name1>, <name2>, "
-                        "...' instead.",
-                        **self.exception_kwargs
-                    )
                 self._add_declared(name.name)
 
 
@@ -213,27 +235,20 @@ class ParseFunc(_ast_util.NodeVisitor):
 
         argnames = [arg_id(arg) for arg in node.args.args]
         if node.args.vararg:
-            argnames.append(arg_stringname(node.args.vararg))
+            argnames.append(node.args.vararg.arg)
 
-        if compat.py2k:
-            # kw-only args don't exist in Python 2
-            kwargnames = []
-        else:
-            kwargnames = [arg_id(arg) for arg in node.args.kwonlyargs]
+        kwargnames = [arg_id(arg) for arg in node.args.kwonlyargs]
         if node.args.kwarg:
-            kwargnames.append(arg_stringname(node.args.kwarg))
+            kwargnames.append(node.args.kwarg.arg)
         self.listener.argnames = argnames
         self.listener.defaults = node.args.defaults  # ast
         self.listener.kwargnames = kwargnames
-        if compat.py2k:
-            self.listener.kwdefaults = []
-        else:
-            self.listener.kwdefaults = node.args.kw_defaults
+        self.listener.kwdefaults = node.args.kw_defaults
         self.listener.varargs = node.args.vararg
         self.listener.kwargs = node.args.kwarg
 
 
-class ExpressionGenerator(object):
+class ExpressionGenerator:
     def __init__(self, astnode):
         self.generator = _ast_util.SourceGenerator(" " * 4)
         self.generator.visit(astnode)

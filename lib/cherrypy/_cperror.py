@@ -34,6 +34,7 @@ user:
                                               POST should not raise this error
 305      Use Proxy                            Confirm with the user
 307      Temporary Redirect                   Confirm with the user
+308      Permanent Redirect                   No confirmation
 =====    =================================    ===========
 
 However, browsers have historically implemented these restrictions poorly;
@@ -119,17 +120,15 @@ and not simply return an error message as a result.
 
 import io
 import contextlib
+import urllib.parse
 from sys import exc_info as _exc_info
 from traceback import format_exception as _format_exception
 from xml.sax import saxutils
-
-import six
-from six.moves import urllib
+import html
 
 from more_itertools import always_iterable
 
 import cherrypy
-from cherrypy._cpcompat import escape_html
 from cherrypy._cpcompat import ntob
 from cherrypy._cpcompat import tonative
 from cherrypy._helper import classproperty
@@ -137,19 +136,17 @@ from cherrypy.lib import httputil as _httputil
 
 
 class CherryPyException(Exception):
-
     """A base class for CherryPy exceptions."""
     pass
 
 
 class InternalRedirect(CherryPyException):
-
     """Exception raised to switch to the handler for a different URL.
 
-    This exception will redirect processing to another path within the site
-    (without informing the client). Provide the new path as an argument when
-    raising the exception. Provide any params in the querystring for the new
-    URL.
+    This exception will redirect processing to another path within the
+    site (without informing the client). Provide the new path as an
+    argument when raising the exception. Provide any params in the
+    querystring for the new URL.
     """
 
     def __init__(self, path, query_string=''):
@@ -174,7 +171,6 @@ class InternalRedirect(CherryPyException):
 
 
 class HTTPRedirect(CherryPyException):
-
     """Exception raised when the request should be redirected.
 
     This exception will force a HTTP redirect to the URL or URL's you give it.
@@ -203,7 +199,7 @@ class HTTPRedirect(CherryPyException):
     """The list of URL's to emit."""
 
     encoding = 'utf-8'
-    """The encoding when passed urls are not native strings"""
+    """The encoding when passed urls are not native strings."""
 
     def __init__(self, urls, status=None, encoding=None):
         self.urls = abs_urls = [
@@ -231,8 +227,7 @@ class HTTPRedirect(CherryPyException):
 
     @classproperty
     def default_status(cls):
-        """
-        The default redirect status for the request.
+        """The default redirect status for the request.
 
         RFC 2616 indicates a 301 response code fits our goal; however,
         browser support for 301 is quite messy. Use 302/303 instead. See
@@ -250,13 +245,14 @@ class HTTPRedirect(CherryPyException):
         """Modify cherrypy.response status, headers, and body to represent
         self.
 
-        CherryPy uses this internally, but you can also use it to create an
-        HTTPRedirect object and set its output without *raising* the exception.
+        CherryPy uses this internally, but you can also use it to create
+        an HTTPRedirect object and set its output without *raising* the
+        exception.
         """
         response = cherrypy.serving.response
         response.status = status = self.status
 
-        if status in (300, 301, 302, 303, 307):
+        if status in (300, 301, 302, 303, 307, 308):
             response.headers['Content-Type'] = 'text/html;charset=utf-8'
             # "The ... URI SHOULD be given by the Location field
             # in the response."
@@ -271,10 +267,11 @@ class HTTPRedirect(CherryPyException):
                 302: 'This resource resides temporarily at ',
                 303: 'This resource can be found at ',
                 307: 'This resource has moved temporarily to ',
+                308: 'This resource has been moved to ',
             }[status]
             msg += '<a href=%s>%s</a>.'
             msgs = [
-                msg % (saxutils.quoteattr(u), escape_html(u))
+                msg % (saxutils.quoteattr(u), html.escape(u, quote=False))
                 for u in self.urls
             ]
             response.body = ntob('<br />\n'.join(msgs), 'utf-8')
@@ -339,7 +336,6 @@ def clean_headers(status):
 
 
 class HTTPError(CherryPyException):
-
     """Exception used to return an HTTP error code (4xx-5xx) to the client.
 
     This exception can be used to automatically send a response using a
@@ -358,7 +354,9 @@ class HTTPError(CherryPyException):
     """
 
     status = None
-    """The HTTP status code. May be of type int or str (with a Reason-Phrase).
+    """The HTTP status code.
+
+    May be of type int or str (with a Reason-Phrase).
     """
 
     code = None
@@ -386,8 +384,9 @@ class HTTPError(CherryPyException):
         """Modify cherrypy.response status, headers, and body to represent
         self.
 
-        CherryPy uses this internally, but you can also use it to create an
-        HTTPError object and set its output without *raising* the exception.
+        CherryPy uses this internally, but you can also use it to create
+        an HTTPError object and set its output without *raising* the
+        exception.
         """
         response = cherrypy.serving.response
 
@@ -426,11 +425,10 @@ class HTTPError(CherryPyException):
 
 
 class NotFound(HTTPError):
-
     """Exception raised when a URL could not be mapped to any handler (404).
 
-    This is equivalent to raising
-    :class:`HTTPError("404 Not Found") <cherrypy._cperror.HTTPError>`.
+    This is equivalent to raising :class:`HTTPError("404 Not Found")
+    <cherrypy._cperror.HTTPError>`.
     """
 
     def __init__(self, path=None):
@@ -466,7 +464,7 @@ _HTTPErrorTemplate = '''<!DOCTYPE html PUBLIC
         <pre id="traceback">%(traceback)s</pre>
     <div id="powered_by">
       <span>
-        Powered by <a href="http://www.cherrypy.org">CherryPy %(version)s</a>
+        Powered by <a href="http://www.cherrypy.dev">CherryPy %(version)s</a>
       </span>
     </div>
     </body>
@@ -477,8 +475,8 @@ _HTTPErrorTemplate = '''<!DOCTYPE html PUBLIC
 def get_error_page(status, **kwargs):
     """Return an HTML page, containing a pretty error response.
 
-    status should be an int or a str.
-    kwargs will be interpolated into the page template.
+    status should be an int or a str. kwargs will be interpolated into
+    the page template.
     """
     try:
         code, reason, message = _httputil.valid_status(status)
@@ -496,11 +494,11 @@ def get_error_page(status, **kwargs):
     if kwargs.get('version') is None:
         kwargs['version'] = cherrypy.__version__
 
-    for k, v in six.iteritems(kwargs):
+    for k, v in kwargs.items():
         if v is None:
             kwargs[k] = ''
         else:
-            kwargs[k] = escape_html(kwargs[k])
+            kwargs[k] = html.escape(kwargs[k], quote=False)
 
     # Use a custom template or callable for the error page?
     pages = cherrypy.serving.request.error_page
@@ -520,19 +518,20 @@ def get_error_page(status, **kwargs):
                 if cherrypy.lib.is_iterator(result):
                     from cherrypy.lib.encoding import UTF8StreamEncoder
                     return UTF8StreamEncoder(result)
-                elif isinstance(result, six.text_type):
+                elif isinstance(result, str):
                     return result.encode('utf-8')
                 else:
                     if not isinstance(result, bytes):
                         raise ValueError(
                             'error page function did not '
-                            'return a bytestring, six.text_type or an '
+                            'return a bytestring, str or an '
                             'iterator - returned object of type %s.'
                             % (type(result).__name__))
                     return result
             else:
                 # Load the template from this path.
-                template = io.open(error_page, newline='').read()
+                with io.open(error_page, newline='') as f:
+                    template = f.read()
         except Exception:
             e = _format_exception(*_exc_info())[-1]
             m = kwargs['message']
@@ -594,8 +593,8 @@ def bare_error(extrabody=None):
     """Produce status, headers, body for a critical error.
 
     Returns a triple without calling any other questionable functions,
-    so it should be as error-free as possible. Call it from an HTTP server
-    if you get errors outside of the request.
+    so it should be as error-free as possible. Call it from an HTTP
+    server if you get errors outside of the request.
 
     If extrabody is None, a friendly but rather unhelpful error message
     is set in the body. If extrabody is a string, it will be appended

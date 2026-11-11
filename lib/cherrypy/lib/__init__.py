@@ -6,8 +6,8 @@ def is_iterator(obj):
 
     (i.e. like a generator).
 
-    This will return False for objects which are iterable,
-    but not iterators themselves.
+    This will return False for objects which are iterable, but not
+    iterators themselves.
     """
     from types import GeneratorType
     if isinstance(obj, GeneratorType):
@@ -69,6 +69,11 @@ class file_generator(object):
                 self.input.close()
             raise StopIteration()
     next = __next__
+
+    def __del__(self):
+        """Close input on descturct."""
+        if hasattr(self.input, 'close'):
+            self.input.close()
 
 
 def file_generator_limited(fileobj, count, chunk_size=65536):

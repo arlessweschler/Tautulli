@@ -21,19 +21,25 @@ datetime.timezone.utc
 
 >>> time(0, 0).tzinfo
 datetime.timezone.utc
+
+Now should be affected by freezegun.
+
+>>> freezer = getfixture('freezer')
+>>> freezer.move_to('1999-12-31 17:00:00 -0700')
+>>> print(now())
+2000-01-01 00:00:00+00:00
 """
 
 import datetime as std
 import functools
 
-
 __all__ = ['now', 'fromtimestamp', 'datetime', 'time']
 
 
-now = functools.partial(std.datetime.now, std.timezone.utc)
-fromtimestamp = functools.partial(
-	std.datetime.fromtimestamp,
-	tz=std.timezone.utc,
-)
+def now() -> std.datetime:
+    return std.datetime.now(std.timezone.utc)
+
+
+fromtimestamp = functools.partial(std.datetime.fromtimestamp, tz=std.timezone.utc)
 datetime = functools.partial(std.datetime, tzinfo=std.timezone.utc)
 time = functools.partial(std.time, tzinfo=std.timezone.utc)

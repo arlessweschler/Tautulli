@@ -23,17 +23,18 @@ import sys
 # Ensure lib added to path, before any other imports
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
 
-from future.builtins import str
 
-import appdirs
 import argparse
-import datetime
+from datetime import datetime
 import locale
-import pytz
+import platformdirs
 import signal
+import shutil
 import time
 import threading
 import tzlocal
+import ctypes
+import zoneinfo
 
 import plexpy
 from plexpy import common, config, database, helpers, logger, webstart
@@ -69,8 +70,26 @@ def main():
     plexpy.SYS_ENCODING = None
 
     try:
-        locale.setlocale(locale.LC_ALL, "")
-        plexpy.SYS_LANGUAGE, plexpy.SYS_ENCODING = locale.getdefaultlocale()
+
+        # Attempt to get the system's locale settings
+        language_code, encoding = locale.getlocale()
+
+        # Special handling for Windows platform
+        if sys.platform == 'win32':
+            # Get the user's current language settings on Windows
+            windll = ctypes.windll.kernel32
+            lang_id = windll.GetUserDefaultLCID()
+
+            # Map Windows language ID to locale identifier
+            language_code = locale.windows_locale.get(lang_id, '')
+
+        # Get the preferred encoding
+        encoding = locale.getpreferredencoding()
+
+        # Assign values to application-specific variable
+        plexpy.SYS_LANGUAGE = language_code
+        plexpy.SYS_ENCODING = encoding
+
     except (locale.Error, IOError):
         pass
 
@@ -110,24 +129,29 @@ def main():
     if args.quiet:
         plexpy.QUIET = True
 
-    # Do an intial setup of the logger.
+    # Do an initial setup of the logger.
     # Require verbose for pre-initilization to see critical errors
     logger.initLogger(console=not plexpy.QUIET, log_dir=False, verbose=True)
 
     try:
         plexpy.SYS_TIMEZONE = tzlocal.get_localzone()
-    except (pytz.UnknownTimeZoneError, LookupError, ValueError) as e:
+    except (zoneinfo.ZoneInfoNotFoundError, LookupError, ValueError) as e:
         logger.error("Could not determine system timezone: %s" % e)
-        plexpy.SYS_TIMEZONE = pytz.UTC
+        plexpy.SYS_TIMEZONE = zoneinfo.ZoneInfo("UTC")
 
-    plexpy.SYS_UTC_OFFSET = datetime.datetime.now(plexpy.SYS_TIMEZONE).strftime('%z')
+    plexpy.SYS_UTC_OFFSET = datetime.now(plexpy.SYS_TIMEZONE).strftime('%z')
 
     if helpers.bool_true(os.getenv('TAUTULLI_DOCKER', False)):
         plexpy.DOCKER = True
+        plexpy.DOCKER_MOUNT = not os.path.isfile('/config/DOCKER')
+    if helpers.bool_true(os.getenv('TAUTULLI_SNAP', False)):
+        plexpy.SNAP = True
+    if helpers.bool_true(os.getenv('TAUTULLI_FLATPAK', False)):
+        plexpy.FLATPAK = True
 
     if args.dev:
         plexpy.DEV = True
-        logger.debug("Tautulli is running in the dev environment.")
+        logger.info("Tautulli is running in the dev environment.")
 
     if args.daemon:
         if sys.platform == 'win32':
@@ -182,9 +206,18 @@ def main():
     if args.datadir:
         plexpy.DATA_DIR = args.datadir
     elif plexpy.FROZEN:
-        plexpy.DATA_DIR = appdirs.user_data_dir("Tautulli", False)
+        plexpy.DATA_DIR = platformdirs.user_data_dir("Tautulli", False)
     else:
         plexpy.DATA_DIR = plexpy.PROG_DIR
+
+    # Migrate Snap data dir
+    if plexpy.SNAP:
+        snap_common = os.environ['SNAP_COMMON']
+        old_data_dir = os.path.join(snap_common, 'Tautulli')
+        if os.path.exists(old_data_dir) and os.listdir(old_data_dir):
+            plexpy.SNAP_MIGRATE = True
+            logger.info("Migrating Snap user data.")
+            shutil.move(old_data_dir, plexpy.DATA_DIR)
 
     if args.config:
         config_file = args.config
@@ -200,9 +233,18 @@ def main():
                 'Could not create data directory: ' + plexpy.DATA_DIR + '. Exiting....')
 
     # Make sure the DATA_DIR is writeable
-    if not os.access(plexpy.DATA_DIR, os.W_OK):
+    test_file = os.path.join(plexpy.DATA_DIR, '.TEST')
+    try:
+        with open(test_file, 'w'):
+            pass
+    except IOError:
         raise SystemExit(
             'Cannot write to the data directory: ' + plexpy.DATA_DIR + '. Exiting...')
+    finally:
+        try:
+            os.remove(test_file)
+        except OSError:
+            pass
 
     # Put the database in the DATA_DIR
     plexpy.DB_FILE = os.path.join(plexpy.DATA_DIR, database.FILENAME)
@@ -224,22 +266,12 @@ def main():
     # Start the background threads
     plexpy.start()
 
-    # Force the http port if neccessary
+    # Force the http port if necessary
     if args.port:
         plexpy.HTTP_PORT = args.port
         logger.info('Using forced web server port: %i', plexpy.HTTP_PORT)
     else:
         plexpy.HTTP_PORT = int(plexpy.CONFIG.HTTP_PORT)
-
-    # Check if pyOpenSSL is installed. It is required for certificate generation
-    # and for CherryPy.
-    if plexpy.CONFIG.ENABLE_HTTPS:
-        try:
-            import OpenSSL
-        except ImportError:
-            logger.warn("The pyOpenSSL module is missing. Install this "
-                        "module to enable HTTPS. HTTPS will be disabled.")
-            plexpy.CONFIG.ENABLE_HTTPS = False
 
     # Try to start the server. Will exit here is address is already in use.
     webstart.start()

@@ -7,7 +7,7 @@
 !define APP_NAME "Tautulli"
 !define COMP_NAME "Tautulli"
 !define WEB_SITE "https://tautulli.com"
-!define COPYRIGHT "Tautulli © 2020"
+!define COPYRIGHT "Tautulli © 2025"
 !define DESCRIPTION "Monitor your Plex Media Server"
 !define APP_ICON "..\dist\Tautulli\data\interfaces\default\images\logo-circle.ico"
 !define LICENSE_TXT "..\dist\Tautulli\LICENSE"
@@ -32,6 +32,7 @@ VIAddVersionKey "FileVersion"  "${VERSION}"
 
 ######################################################################
 
+Unicode True
 SetCompressor ZLIB
 Name "${APP_NAME}"
 Caption "${APP_NAME}"
@@ -39,7 +40,7 @@ OutFile "${INSTALLER_NAME}"
 BrandingText "${APP_NAME}"
 XPStyle on
 InstallDirRegKey "${REG_ROOT}" "${REG_APP_PATH}" ""
-InstallDir "$PROGRAMFILES\${APP_NAME}"
+InstallDir "$PROGRAMFILES64\${APP_NAME}"
 
 ######################################################################
 
@@ -76,9 +77,17 @@ InstallDir "$PROGRAMFILES\${APP_NAME}"
 
 !include Sections.nsh
 
-Var /GLOBAL nolaunch
+Var /GLOBAL createDesktopShortcut
+Var /GLOBAL skipLaunch
+Var /GLOBAL skipBrowser
+Var desktopShortcutCheckbox
 
-!include "MUI.nsh"
+!include "MUI2.nsh"
+!include "nsDialogs.nsh"
+!include "FileFunc.nsh"
+!include "Util.nsh"
+!include "WinMessages.nsh"
+!addplugindir nsis-plugins\x86-unicode
 
 !define MUI_ABORTWARNING
 !define MUI_UNABORTWARNING
@@ -99,11 +108,22 @@ Var /GLOBAL nolaunch
 !insertmacro MUI_PAGE_STARTMENU Application $SM_Folder
 !endif
 
+!insertmacro MUI_PAGE_DIRECTORY
+
+Page custom CustomizePage CustomizePageLeave
+
 !insertmacro MUI_PAGE_INSTFILES
 
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishPageShow
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${MAIN_APP_EXE}"
-!define MUI_FINISHPAGE_RUN_PARAMETERS $nolaunch
+!define MUI_FINISHPAGE_RUN_PARAMETERS $skipBrowser
 !insertmacro MUI_PAGE_FINISH
+
+Function FinishPageShow
+  ${If} $skipLaunch == 1
+    ${NSD_Uncheck} $mui.FinishPage.Run
+  ${EndIf}
+FunctionEnd
 
 !insertmacro MUI_UNPAGE_CONFIRM
 
@@ -119,12 +139,13 @@ Section -MainProgram
 Call UninstallPrevious
 
 ${INSTALL_TYPE}
-SetOverwrite ifnewer
+SetOverwrite on
 SetOutPath "$INSTDIR"
 File /nonfatal /a /r "..\dist\${APP_NAME}\"
 
-IfSilent 0 +2
-ExecShell "" "$INSTDIR\${MAIN_APP_EXE}" $nolaunch
+IfSilent 0 +3
+StrCmp $skipLaunch 1 +2 0
+ExecShell "" "$INSTDIR\${MAIN_APP_EXE}" $skipBrowser
 SectionEnd
 
 ######################################################################
@@ -137,7 +158,9 @@ WriteUninstaller "$INSTDIR\uninstall.exe"
 !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
 CreateDirectory "$SMPROGRAMS\$SM_Folder"
 CreateShortCut "$SMPROGRAMS\$SM_Folder\${APP_NAME}.lnk" "$INSTDIR\${MAIN_APP_EXE}"
+${If} $createDesktopShortcut == 1
 CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${MAIN_APP_EXE}"
+${EndIf}
 CreateShortCut "$SMPROGRAMS\$SM_Folder\Uninstall ${APP_NAME}.lnk" "$INSTDIR\uninstall.exe"
 
 !ifdef WEB_SITE
@@ -150,7 +173,9 @@ CreateShortCut "$SMPROGRAMS\$SM_Folder\${APP_NAME} Website.lnk" "$INSTDIR\${APP_
 !ifndef REG_START_MENU
 CreateDirectory "$SMPROGRAMS\${APP_NAME}"
 CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${MAIN_APP_EXE}"
+${If} $createDesktopShortcut == 1
 CreateShortCut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${MAIN_APP_EXE}"
+${EndIf}
 CreateShortCut "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk" "$INSTDIR\uninstall.exe"
 
 !ifdef WEB_SITE
@@ -190,7 +215,9 @@ Delete "$SMPROGRAMS\$SM_Folder\Uninstall ${APP_NAME}.lnk"
 !ifdef WEB_SITE
 Delete "$SMPROGRAMS\$SM_Folder\${APP_NAME} Website.lnk"
 !endif
+${If} $createDesktopShortcut == 1
 Delete "$DESKTOP\${APP_NAME}.lnk"
+${EndIf}
 
 RmDir "$SMPROGRAMS\$SM_Folder"
 !endif
@@ -201,7 +228,9 @@ Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"
 !ifdef WEB_SITE
 Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME} Website.lnk"
 !endif
+${If} $createDesktopShortcut == 1
 Delete "$DESKTOP\${APP_NAME}.lnk"
+${EndIf}
 
 RmDir "$SMPROGRAMS\${APP_NAME}"
 !endif
@@ -213,8 +242,37 @@ SectionEnd
 ######################################################################
 
 Function .onInit
+  ; Set default value for desktop shortcut (1 = create, 0 = don't create)
+  StrCpy $createDesktopShortcut 0
+  
+  ; Set default value for skip launch (0 = launch, 1 = skip)
+  StrCpy $skipLaunch 0
+  
+  ; Set default value for skip browser
+  StrCpy $skipBrowser ""
+  
+  ; Check for /NOLAUNCH flag
+  ${GetParameters} $0
+  ${GetOptions} $0 "/NOLAUNCH" $1
+  ${If} ${Errors}
+    ; No /NOLAUNCH flag found
+  ${Else}
+    ; /NOLAUNCH flag found, skip launch
+    StrCpy $skipLaunch 1
+  ${EndIf}
+  
+  ; Check for /NOBROWSER flag
+  ${GetParameters} $0
+  ${GetOptions} $0 "/NOBROWSER" $1
+  ${If} ${Errors}
+    ; No /NOBROWSER flag found
+  ${Else}
+    ; /NOBROWSER flag found, skip browser
+    StrCpy $skipBrowser "--nolaunch"
+  ${EndIf}
+  
   IfSilent 0 +2
-  StrCpy $nolaunch "--nolaunch"
+  StrCpy $skipBrowser "--nolaunch"
   
   IfSilent +5 0
   Loop:
@@ -251,6 +309,25 @@ Function UninstallPrevious
   ; Run the uninstaller silently.
   ExecWait '"$R0" /S _?=$INSTDIR'
   Done:
+FunctionEnd
+
+######################################################################
+
+Function CustomizePage
+  !insertmacro MUI_HEADER_TEXT "Installation Options" "Choose installation options"
+  
+  nsDialogs::Create 1018
+  Pop $0
+  
+  ${NSD_CreateCheckbox} 10u 10u 90% 12u "Create Desktop Shortcut"
+  Pop $desktopShortcutCheckbox
+  ${NSD_SetState} $desktopShortcutCheckbox $createDesktopShortcut
+  
+  nsDialogs::Show
+FunctionEnd
+
+Function CustomizePageLeave
+  ${NSD_GetState} $desktopShortcutCheckbox $createDesktopShortcut
 FunctionEnd
 
 ######################################################################

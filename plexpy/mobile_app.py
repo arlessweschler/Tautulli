@@ -15,49 +15,59 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import str
-
+import hashlib
 import requests
 import threading
+import time
 
 import plexpy
-if plexpy.PYTHON2:
-    import database
-    import helpers
-    import logger
-else:
-    from plexpy import database
-    from plexpy import helpers
-    from plexpy import logger
+from plexpy import database
+from plexpy import helpers
+from plexpy import logger
 
 
-TEMP_DEVICE_TOKEN = None
-INVALIDATE_TIMER = None
+_PUSH_DISABLED = 'push-disabled'
 
-_ONESIGNAL_APP_ID = '3b4b666a-d557-4b92-acdf-e2c8c4b95357'
+_REVALIDATE_INTERVAL = 2  # seconds; the relay rate limits /v1/validate per client IP
+
+TEMP_DEVICE_TOKENS = {}
+
+_LAST_SEEN = {}
+_LAST_SEEN_THROTTLE = 60  # seconds between last_seen writes per device
 
 
-def set_temp_device_token(token=None):
-    global TEMP_DEVICE_TOKEN
-    TEMP_DEVICE_TOKEN = token
+def relay_device_id(push_token):
+    """
+    Return the identifier the relay records and Tautulli Remote shows on its
+    data dump page. The push token itself is blacklisted from the logs.
+    """
+    if not push_token or push_token == _PUSH_DISABLED:
+        return 'none'
+    return hashlib.sha256(push_token.encode()).hexdigest()[:16]
 
-    if TEMP_DEVICE_TOKEN:
-        logger._BLACKLIST_WORDS.add(TEMP_DEVICE_TOKEN)
-    else:
-        logger._BLACKLIST_WORDS.discard(TEMP_DEVICE_TOKEN)
 
-    if TEMP_DEVICE_TOKEN is not None:
-        global INVALIDATE_TIMER
-        if INVALIDATE_TIMER:
-            INVALIDATE_TIMER.cancel()
+def set_temp_device_token(token=None, remove=False, add=False, success=False):
+    global TEMP_DEVICE_TOKENS
+
+    if token in TEMP_DEVICE_TOKENS and success:
+        if isinstance(TEMP_DEVICE_TOKENS[token], threading.Timer):
+            TEMP_DEVICE_TOKENS[token].cancel()
+        TEMP_DEVICE_TOKENS[token] = True
+
+    elif token in TEMP_DEVICE_TOKENS and remove:
+        if isinstance(TEMP_DEVICE_TOKENS[token], threading.Timer):
+            TEMP_DEVICE_TOKENS[token].cancel()
+        del TEMP_DEVICE_TOKENS[token]
+
+    elif token not in TEMP_DEVICE_TOKENS and add:
         invalidate_time = 5 * 60  # 5 minutes
-        INVALIDATE_TIMER = threading.Timer(invalidate_time, set_temp_device_token, args=[None])
-        INVALIDATE_TIMER.start()
+        TEMP_DEVICE_TOKENS[token] = threading.Timer(invalidate_time, set_temp_device_token, args=[token, True])
+        TEMP_DEVICE_TOKENS[token].start()
+        logger._BLACKLIST_WORDS.add(token)
 
 
-def get_temp_device_token():
-    return TEMP_DEVICE_TOKEN
+def get_temp_device_token(token=None):
+    return TEMP_DEVICE_TOKENS.get(token)
 
 
 def get_mobile_devices(device_id=None, device_token=None):
@@ -65,17 +75,17 @@ def get_mobile_devices(device_id=None, device_token=None):
     args = []
 
     if device_id or device_token:
-        where = 'WHERE '
+        where = "WHERE "
         if device_id:
-            where_id += 'device_id = ?'
+            where_id += "device_id = ?"
             args.append(device_id)
         if device_token:
-            where_token = 'device_token = ?'
+            where_token = "device_token = ?"
             args.append(device_token)
-        where += ' AND '.join([w for w in [where_id, where_token] if w])
+        where += " AND ".join([w for w in [where_id, where_token] if w])
 
     db = database.MonitorDatabase()
-    result = db.select('SELECT * FROM mobile_devices %s' % where, args=args)
+    result = db.select("SELECT * FROM mobile_devices %s" % where, args=args)
 
     return result
 
@@ -87,14 +97,16 @@ def get_mobile_device_by_token(device_token=None):
     return get_mobile_devices(device_token=device_token)
 
 
-def add_mobile_device(device_id=None, device_name=None, device_token=None, friendly_name=None, onesignal_id=None):
+def add_mobile_device(device_id=None, device_name=None, device_token=None,
+                      platform=None, version=None, friendly_name=None, push_token=None):
     db = database.MonitorDatabase()
 
     keys = {'device_id': device_id}
     values = {'device_name': device_name,
               'device_token': device_token,
-              'onesignal_id': onesignal_id,
-              'official': validate_onesignal_id(onesignal_id=onesignal_id)}
+              'platform': platform,
+              'version': version,
+              'push_token': push_token}
 
     if friendly_name:
         values['friendly_name'] = friendly_name
@@ -103,14 +115,19 @@ def add_mobile_device(device_id=None, device_name=None, device_token=None, frien
         result = db.upsert(table_name='mobile_devices', key_dict=keys, value_dict=values)
         blacklist_logger()
     except Exception as e:
-        logger.warn("Tautulli MobileApp :: Failed to register mobile device in the database: %s." % e)
+        logger.exception("Tautulli MobileApp :: Failed to register mobile device in the database: %s." % e)
         return
 
     if result == 'insert':
         logger.info("Tautulli MobileApp :: Registered mobile device '%s' in the database." % device_name)
     else:
-        logger.debug("Tautulli MobileApp :: Re-registered mobile device '%s' in the database." % device_name)
+        logger.info("Tautulli MobileApp :: Re-registered mobile device '%s' in the database." % device_name)
 
+    # A (re-)registered device must get a fresh last_seen even if the
+    # same token wrote one within the throttle window
+    _LAST_SEEN.pop(device_token, None)
+    set_last_seen(device_token=device_token)
+    threading.Thread(target=set_official, args=[device_id, push_token]).start()
     return True
 
 
@@ -122,8 +139,13 @@ def get_mobile_device_config(mobile_device_id=None):
         return None
 
     db = database.MonitorDatabase()
-    result = db.select_single('SELECT * FROM mobile_devices WHERE id = ?',
+    result = db.select_single("SELECT * FROM mobile_devices WHERE id = ?",
                               args=[mobile_device_id])
+
+    if result['push_token'] == _PUSH_DISABLED:
+        result['push_token'] = ''
+
+    result['relay_device_id'] = relay_device_id(result['push_token']) if result['push_token'] else ''
 
     return result
 
@@ -132,7 +154,7 @@ def set_mobile_device_config(mobile_device_id=None, **kwargs):
     if str(mobile_device_id).isdigit():
         mobile_device_id = int(mobile_device_id)
     else:
-        logger.error("Tautulli MobileApp :: Unable to set exisiting mobile device: invalid mobile_device_id %s." % mobile_device_id)
+        logger.error("Tautulli MobileApp :: Unable to set existing mobile device: invalid mobile_device_id %s." % mobile_device_id)
         return False
 
     keys = {'id': mobile_device_id}
@@ -145,43 +167,133 @@ def set_mobile_device_config(mobile_device_id=None, **kwargs):
         blacklist_logger()
         return True
     except Exception as e:
-        logger.warn("Tautulli MobileApp :: Unable to update mobile device: %s." % e)
+        logger.exception("Tautulli MobileApp :: Unable to update mobile device: %s." % e)
         return False
 
 
-def delete_mobile_device(mobile_device_id=None):
+def delete_mobile_device(mobile_device_id=None, device_id=None):
     db = database.MonitorDatabase()
 
     if mobile_device_id:
-        logger.debug("Tautulli MobileApp :: Deleting device_id %s from the database." % mobile_device_id)
-        result = db.action('DELETE FROM mobile_devices WHERE id = ?', args=[mobile_device_id])
+        logger.info("Tautulli MobileApp :: Deleting mobile_device_id %s from the database." % mobile_device_id)
+        result = db.action("DELETE FROM mobile_devices WHERE id = ?", args=[mobile_device_id])
+        return True
+    elif device_id:
+        logger.info("Tautulli MobileApp :: Deleting device_id %s from the database." % device_id)
+        result = db.action("DELETE FROM mobile_devices WHERE device_id = ?", args=[device_id])
         return True
     else:
+        logger.warn("Tautulli MobileApp :: Unable to delete mobile device: no mobile_device_id or device_id provided.")
         return False
 
 
-def set_last_seen(device_token=None):
+def set_official(device_id, push_token=None):
     db = database.MonitorDatabase()
 
-    last_seen = helpers.timestamp()
+    # App versions before the relay register no push token and cannot receive notifications.
+    official = validate_push_token(push_token=push_token) if push_token else 0
+
+    # An indeterminate result says nothing about the token, so don't let it
+    # clear a device that has already validated.
+    where = "WHERE device_id = ?"
+    if official == -1:
+        where += " AND coalesce(official, 0) != 1"
 
     try:
-        result = db.action('UPDATE mobile_devices SET last_seen = ? WHERE device_token = ?',
-                           args=[last_seen, device_token])
+        result = db.action("UPDATE mobile_devices "
+                           "SET official = ? "
+                           "%s" % where,
+                           args=[official, device_id])
     except Exception as e:
-        logger.warn("Tautulli MobileApp :: Failed to set last_seen time for device: %s." % e)
+        logger.warn("Tautulli MobileApp :: Failed to set official flag: %s." % e, exc_info=True)
         return
 
 
-def validate_onesignal_id(onesignal_id):
-    if onesignal_id is None:
-        return False
+def set_official_from_delivery(device, official):
+    if device['official'] == official:
+        return
 
-    headers = {'Content-Type': 'application/json'}
-    payload = {'app_id': _ONESIGNAL_APP_ID}
+    db = database.MonitorDatabase()
 
-    r = requests.get('https://onesignal.com/api/v1/players/{}'.format(onesignal_id), headers=headers, json=payload)
-    return r.status_code == 200
+    try:
+        db.action("UPDATE mobile_devices SET official = ? WHERE device_id = ?",
+                  args=[official, device['device_id']])
+    except Exception as e:
+        logger.warn("Tautulli MobileApp :: Failed to set official flag for device %s: %s."
+                    % (relay_device_id(device['push_token']), e), exc_info=True)
+
+
+def set_last_seen(device_token=None):
+    last_seen = helpers.timestamp()
+
+    # Every authenticated mobile app API call updates last_seen; throttle
+    # the write so read-only polling doesn't contend with activity
+    # processing on every request
+    if last_seen - _LAST_SEEN.get(device_token, 0) < _LAST_SEEN_THROTTLE:
+        return
+    _LAST_SEEN[device_token] = last_seen
+
+    db = database.MonitorDatabase()
+
+    try:
+        result = db.action("UPDATE mobile_devices SET last_seen = ? WHERE device_token = ?",
+                           args=[last_seen, device_token])
+    except Exception as e:
+        logger.warn("Tautulli MobileApp :: Failed to set last_seen time for device: %s." % e, exc_info=True)
+        return
+
+
+def validate_push_token(push_token):
+    if push_token == _PUSH_DISABLED:
+        return 2
+
+    payload = {'token': push_token}
+
+    device_id = relay_device_id(push_token)
+
+    logger.info("Tautulli MobileApp :: Validating push token for device %s", device_id)
+    try:
+        # A 307 or 308 would re-post the push token to wherever Location points.
+        r = requests.post(f"{plexpy.CONFIG.REMOTE_APP_PUSH_URL.rstrip('/')}/v1/validate",
+                          json=payload, timeout=10,
+                          allow_redirects=False)
+        status_code = r.status_code
+        logger.info("Tautulli MobileApp :: Push token validation for device %s returned status code %s",
+                    device_id, status_code)
+        if status_code == 200:
+            return 1
+        elif status_code == 410:
+            return 0
+        # Anything else (rate limited, relay or FCM outage) says nothing about
+        # the token itself, so do not mark the device as invalid.
+        return -1
+    except Exception as e:
+        logger.warn("Tautulli MobileApp :: Failed to validate push token for device %s: %s." % (device_id, e))
+        return -1
+
+
+def validates_remotely(device):
+    return bool(device['push_token']) and device['push_token'] != _PUSH_DISABLED
+
+
+def revalidate_devices():
+    # Runs on every startup; threaded so a blocked host cannot hold up boot.
+    threading.Thread(target=_revalidate_devices).start()
+
+
+def _revalidate_devices():
+    # Re-validating a healthy device risks the relay's per-IP limit on
+    # /v1/validate, and a device that opted out has no registration to check.
+    devices = [d for d in get_mobile_devices() if d['official'] != 1 and validates_remotely(d)]
+
+    if not devices:
+        return
+
+    logger.info("Tautulli MobileApp :: Validating %s mobile device registration(s).", len(devices))
+
+    for device in devices:
+        set_official(device['device_id'], device['push_token'])
+        time.sleep(_REVALIDATE_INTERVAL)
 
 
 def blacklist_logger():

@@ -37,15 +37,11 @@ import sys
 import threading
 import time
 
-import six
-
 import cherrypy
 from cherrypy.lib import cptools, httputil
-from cherrypy._cpcompat import Event
 
 
 class Cache(object):
-
     """Base class for Cache implementations."""
 
     def get(self):
@@ -67,22 +63,21 @@ class Cache(object):
 
 # ------------------------------ Memory Cache ------------------------------- #
 class AntiStampedeCache(dict):
-
     """A storage system for cached items which reduces stampede collisions."""
 
     def wait(self, key, timeout=5, debug=False):
         """Return the cached value for the given key, or None.
 
-        If timeout is not None, and the value is already
-        being calculated by another thread, wait until the given timeout has
-        elapsed. If the value is available before the timeout expires, it is
-        returned. If not, None is returned, and a sentinel placed in the cache
-        to signal other threads to wait.
+        If timeout is not None, and the value is already being
+        calculated by another thread, wait until the given timeout has
+        elapsed. If the value is available before the timeout expires,
+        it is returned. If not, None is returned, and a sentinel placed
+        in the cache to signal other threads to wait.
 
         If timeout is None, no waiting is performed nor sentinels used.
         """
         value = self.get(key)
-        if isinstance(value, Event):
+        if isinstance(value, threading.Event):
             if timeout is None:
                 # Ignore the other thread and recalc it ourselves.
                 if debug:
@@ -122,7 +117,7 @@ class AntiStampedeCache(dict):
         """Set the cached value for the given key."""
         existing = self.get(key)
         dict.__setitem__(self, key, value)
-        if isinstance(existing, Event):
+        if isinstance(existing, threading.Event):
             # Set Event.result so other threads waiting on it have
             # immediate access without needing to poll the cache again.
             existing.result = value
@@ -130,7 +125,6 @@ class AntiStampedeCache(dict):
 
 
 class MemoryCache(Cache):
-
     """An in-memory cache for varying response content.
 
     Each key in self.store is a URI, and each value is an AntiStampedeCache.
@@ -199,8 +193,7 @@ class MemoryCache(Cache):
             now = time.time()
             # Must make a copy of expirations so it doesn't change size
             # during iteration
-            items = list(six.iteritems(self.expirations))
-            for expiration_time, objects in items:
+            for expiration_time, objects in self.expirations.copy().items():
                 if expiration_time <= now:
                     for obj_size, uri, sel_header_values in objects:
                         try:
@@ -385,7 +378,10 @@ def get(invalid_methods=('POST', 'PUT', 'DELETE'), debug=False, **kwargs):
 
 
 def tee_output():
-    """Tee response output to cache storage. Internal."""
+    """Tee response output to cache storage.
+
+    Internal.
+    """
     # Used by CachingTool by attaching to request.hooks
 
     request = cherrypy.serving.request
@@ -445,7 +441,6 @@ def expires(secs=0, force=False, debug=False):
             * Expires
 
         If any are already present, none of the above response headers are set.
-
     """
 
     response = cherrypy.serving.response

@@ -15,18 +15,20 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-from future.builtins import str
+import secrets
 
 import cherrypy
 
 import plexpy
-if plexpy.PYTHON2:
-    import common
-    import users
-else:
-    from plexpy import common
-    from plexpy import users
+from plexpy import common
+from plexpy import users
+
+
+def generate_csrf_token():
+    """
+    Generates a CSRF token for the current session
+    """
+    return secrets.token_urlsafe(32)
 
 
 def get_session_info():
@@ -43,6 +45,27 @@ def get_session_info():
 
     return _session
 
+
+def get_session_csrf_token():
+    """
+    Returns the CSRF token for the current logged in session
+    """
+    # Session locking is 'explicit'. Acquire the lock before the first
+    # session access: loading happens lazily on first access, and two
+    # parallel first renders (e.g. tabs restored after a restart, when
+    # the RAM session store is empty) must not each load their own empty
+    # copy and mint different tokens. Only HTML page renders take this
+    # lock; XHRs and images never touch the session. CherryPy releases
+    # the lock ONCE automatically when the request ends, so a request
+    # must never acquire it twice (the login handlers also acquire
+    # before this runs via the template render).
+    if not cherrypy.session.locked:
+        cherrypy.session.acquire_lock()
+    if '_csrf_token' not in cherrypy.session:
+        cherrypy.session['_csrf_token'] = generate_csrf_token()
+    return cherrypy.session['_csrf_token']
+
+
 def get_session_user():
     """
     Returns the user_id for the current logged in session
@@ -56,6 +79,22 @@ def get_session_user_id():
     """
     _session = get_session_info()
     return str(_session['user_id']) if _session['user_group'] == 'guest' and _session['user_id'] else None
+
+
+def get_session_user_token():
+    """
+    Returns the user's server_token for the current logged in session
+    """
+    _session = get_session_info()
+
+    if _session['user_group'] == 'guest' and _session['user_id']:
+        session_user_tokens = users.Users().get_tokens(_session['user_id'])
+        user_token = session_user_tokens['server_token']
+    else:
+        user_token = plexpy.CONFIG.PMS_TOKEN
+
+    return user_token
+
 
 def get_session_shared_libraries():
     """
@@ -155,6 +194,12 @@ def filter_session_info(list_of_dicts, filter_key=None):
             if str(d.get('section_id','')) not in session_library_ids:
                 continue
 
+            # Rows without a media type cannot be evaluated against the
+            # library content filters; keep them (they already passed the
+            # shared-library check). Previously `keep` leaked from the
+            # prior iteration or was unbound on the first.
+            keep = True
+
             if d.get('media_type'):
                 f_content_rating, f_labels = get_session_library_filters_type(session_library_filters,
                                                                               media_type=d['media_type'])
@@ -195,32 +240,63 @@ def mask_session_info(list_of_dicts, mask_metadata=True):
     session_library_ids = get_session_shared_libraries()
     session_library_filters = get_session_library_filters()
 
-    keys_to_mask = {'user_id': '',
-                    'user': 'Plex User',
-                    'friendly_name': 'Plex User',
-                    'user_thumb': common.DEFAULT_USER_THUMB,
-                    'ip_address': 'N/A',
-                    'machine_id': '',
-                    'player': 'Player'
-                    }
+    keys_to_mask = {
+        'user_id': '',
+        'user': 'Plex User',
+        'username': 'Plex User',
+        'email': '',
+        'friendly_name': 'Plex User',
+        'user_thumb': common.DEFAULT_USER_THUMB,
+        'ip_address': 'N/A',
+        'ip_address_public': 'N/A',
+        'machine_id': '',
+        'player': 'Player'
+    }
 
-    metadata_to_mask = {'media_index': '0',
-                        'parent_media_index': '0',
-                        'art': common.DEFAULT_ART,
-                        'parent_thumb': common.DEFAULT_POSTER_THUMB,
-                        'grandparent_thumb': common.DEFAULT_POSTER_THUMB,
-                        'thumb': common.DEFAULT_POSTER_THUMB,
-                        'bif_thumb': '',
-                        'title': 'Plex Media',
-                        'parent_title': 'Plex Media',
-                        'grandparent_title': 'Plex Media',
-                        'original_title': 'Plex Media',
-                        'rating_key': '',
-                        'parent_rating_key': '',
-                        'grandparent_rating_key': '',
-                        'year': '',
-                        'last_played': 'Plex Media'
-                        }
+    metadata_to_mask = {
+        'actors': [],
+        'art': common.DEFAULT_ART,
+        'bif_thumb': '',
+        'content_rating': '',
+        'directors': [],
+        'edition_title': '',
+        'file': '',
+        'full_title': 'Plex Media',
+        'genres': [],
+        'grandparent_guid': '',
+        'grandparent_guids': [],
+        'grandparent_rating_key': '',
+        'grandparent_thumb': common.DEFAULT_POSTER_THUMB,
+        'grandparent_title': 'Plex Media',
+        'grandparent_year': '',
+        'guid': '',
+        'guids': [],
+        'labels': [],
+        'library_name': '',
+        'media_index': '0',
+        'original_title': 'Plex Media',
+        'originally_available_at': '',
+        'parent_guid': '',
+        'parent_guids': [],
+        'parent_media_index': '0',
+        'parent_rating_key': '',
+        'parent_thumb': common.DEFAULT_POSTER_THUMB,
+        'parent_title': 'Plex Media',
+        'parent_year': '',
+        'rating_key': '',
+        'section_id': '',
+        'shared_libraries': [],
+        'sort_title': 'Plex Media',
+        'studio': '',
+        'summary': '',
+        'tagline': '',
+        'thumb': common.DEFAULT_POSTER_THUMB,
+        'title': 'Plex Media',
+        'writers': [],
+        'year': '',
+
+        'last_played': 'Plex Media',
+    }
 
     list_of_dicts = friendly_name_to_username(list_of_dicts)
 

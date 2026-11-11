@@ -1,24 +1,18 @@
 """A library of helper functions for the Cheroot test suite."""
 
-from __future__ import absolute_import, division, print_function
-__metaclass__ = type
-
 import datetime
+import http.client
 import logging
 import os
 import sys
-import time
 import threading
+import time
 import types
-
-from six.moves import http_client
-
-import six
 
 import cheroot.server
 import cheroot.wsgi
-
 from cheroot.test import webtest
+
 
 log = logging.getLogger(__name__)
 thisdir = os.path.abspath(os.path.dirname(__file__))
@@ -60,14 +54,14 @@ class CherootWebCase(webtest.WebCase):
             cls.scheme = 'http'
         else:
             ssl = ' (ssl)'
-            cls.HTTP_CONN = http_client.HTTPSConnection
+            cls.HTTP_CONN = http.client.HTTPSConnection
             cls.scheme = 'https'
 
         v = sys.version.split()[0]
-        log.info('Python version used to run this test script: %s' % v)
-        log.info('Cheroot version: %s' % cheroot.__version__)
-        log.info('HTTP server version: %s%s' % (cls.httpserver.protocol, ssl))
-        log.info('PID: %s' % os.getpid())
+        log.info('Python version used to run this test script: %s', v)
+        log.info('Cheroot version: %s', cheroot.__version__)
+        log.info('HTTP server version: %s%s', cls.httpserver.protocol, ssl)
+        log.info('PID: %s', os.getpid())
 
         if hasattr(cls, 'setup_server'):
             # Clear the wsgi server so that
@@ -99,7 +93,7 @@ class CherootWebCase(webtest.WebCase):
     date_tolerance = 2
 
     def assertEqualDates(self, dt1, dt2, seconds=None):
-        """Assert abs(dt1 - dt2) is within Y seconds."""
+        """Assert ``abs(dt1 - dt2)`` is within ``Y`` seconds."""
         if seconds is None:
             seconds = self.date_tolerance
 
@@ -108,8 +102,9 @@ class CherootWebCase(webtest.WebCase):
         else:
             diff = dt2 - dt1
         if not diff < datetime.timedelta(seconds=seconds):
-            raise AssertionError('%r and %r are not within %r seconds.' %
-                                 (dt1, dt2, seconds))
+            raise AssertionError(
+                '%r and %r are not within %r seconds.' % (dt1, dt2, seconds),
+            )
 
 
 class Request:
@@ -133,12 +128,11 @@ class Response:
         """Generate iterable response body object."""
         if self.body is None:
             return []
-        elif isinstance(self.body, six.text_type):
+        if isinstance(self.body, str):
             return [self.body.encode('iso-8859-1')]
-        elif isinstance(self.body, six.binary_type):
+        if isinstance(self.body, bytes):
             return [self.body]
-        else:
-            return [x.encode('iso-8859-1') for x in self.body]
+        return [x.encode('iso-8859-1') for x in self.body]
 
 
 class Controller:
@@ -155,9 +149,10 @@ class Controller:
             resp.status = '404 Not Found'
         else:
             output = handler(req, resp)
-            if (output is not None
-                and not any(resp.status.startswith(status_code)
-                            for status_code in ('204', '304'))):
+            if output is not None and not any(
+                resp.status.startswith(status_code)
+                for status_code in ('204', '304')
+            ):
                 resp.body = output
                 try:
                     resp.headers.setdefault('Content-Length', str(len(output)))

@@ -22,11 +22,10 @@ it will call ``serve()`` for you.
 
 import re
 import sys
-import cgi
+import html
 import os
 import os.path
-
-from six.moves import urllib
+import urllib.parse
 
 import cherrypy
 
@@ -335,9 +334,10 @@ class CoverStats(object):
         yield '</body></html>'
 
     def annotated_file(self, filename, statements, excluded, missing):
-        source = open(filename, 'r')
+        with open(filename, 'r') as source:
+            lines = source.readlines()
         buffer = []
-        for lineno, line in enumerate(source.readlines()):
+        for lineno, line in enumerate(lines):
             lineno += 1
             line = line.strip('\n\r')
             empty_the_buffer = True
@@ -352,9 +352,9 @@ class CoverStats(object):
                 buffer.append((lineno, line))
             if empty_the_buffer:
                 for lno, pastline in buffer:
-                    yield template % (lno, cgi.escape(pastline))
+                    yield template % (lno, html.escape(pastline))
                 buffer = []
-                yield template % (lineno, cgi.escape(line))
+                yield template % (lineno, html.escape(line))
 
     @cherrypy.expose
     def report(self, name):

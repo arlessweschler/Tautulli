@@ -24,6 +24,10 @@ history_table_options = {
     },
     "pagingType": "full_numbers",
     "stateSave": true,
+    "stateSaveParams": function (settings, data) {
+        data.search.search = "";
+        data.start = 0;
+    },
     "stateDuration": 0,
     "processing": false,
     "serverSide": true,
@@ -55,22 +59,24 @@ history_table_options = {
                 if (rowData['state'] !== null) {
                     var state = '';
                     if (rowData['state'] === 'playing') {
-                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Playing"><i class="fa fa-play fa-fw"></i></span>';
+                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Playing"><i class="fa fa-fw fa-play"></i></span>';
                     } else if (rowData['state'] === 'paused') {
-                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Paused"><i class="fa fa-pause fa-fw"></i></span>';
+                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Paused"><i class="fa fa-fw fa-pause"></i></span>';
                     } else if (rowData['state'] === 'buffering') {
-                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Buffering"><i class="fa fa-spinner fa-fw"></i></span>';
+                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Buffering"><i class="fa fa-fw fa-spinner"></i></span>';
                     } else if (rowData['state'] === 'error') {
-                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Playback Error"><i class="fa fa-exclamation-triangle fa-fw"></i></span>';
+                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Playback Error"><i class="fa fa-fw fa-exclamation-triangle"></i></span>';
                     } else if (rowData['state'] === 'stopped') {
-                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Stopped"><i class="fa fa-stop fa-fw"></i></span>';
+                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Currently Stopped"><i class="fa fa-fw fa-stop"></i></span>';
+                    } else {
+                        state = '<span class="current-activity-tooltip" data-toggle="tooltip" title="Unknown"><i class="fa fa-fw fa-question-circle"></i></span>';
                     }
-                    $(td).html('<div><div style="float: left;">' + state + '&nbsp;' + date + '</div></div>');
+                    $(td).html(state + '&nbsp;' + date);
                 } else if (rowData['group_count'] > 1) {
                     expand_history = '<span class="expand-history-tooltip" data-toggle="tooltip" title="Show Detailed History"><i class="fa fa-plus-circle fa-fw"></i></span>';
-                    $(td).html('<div><a href="#"><div style="float: left;">' + expand_history + '&nbsp;' + date + '</div></a></div>');
+                    $(td).html('<a href="#">' + expand_history + '&nbsp;' + date + '</a>');
                 } else {
-                    $(td).html('<div style="float: left;"><i class="fa fa-plus-circle fa-fw fa-blank">&nbsp;</i>&nbsp;' + date + '</div>');
+                    $(td).html('<i class="fa fa-plus-circle fa-fw fa-blank">&nbsp;</i>&nbsp;' + date);
                 }
             },
             "searchable": false,
@@ -83,9 +89,9 @@ history_table_options = {
             "createdCell": function (td, cellData, rowData, row, col) {
                 if (cellData !== '') {
                     if (rowData['user_id']) {
-                        $(td).html('<a href="' + page('user', rowData['user_id']) + '">' + cellData + '</a>');
+                        $(td).html('<a href="' + page('user', rowData['user_id']) + '" title="' + rowData['user'] + '">' + cellData + '</a>');
                     } else {
-                        $(td).html('<a href="' + page('user', null, rowData['user']) + '">' + cellData + '</a>');
+                        $(td).html('<a href="' + page('user', null, rowData['user']) + '" title="' + rowData['user'] + '">' + cellData + '</a>');
                     }
                 } else {
                     $(td).html(cellData);
@@ -99,9 +105,9 @@ history_table_options = {
             "data": "ip_address",
             "createdCell": function (td, cellData, rowData, row, col) {
                 if (cellData) {
-                    isPrivateIP(cellData).then(function () {
-                        $(td).html(cellData || 'n/a');
-                    }, function () {
+                    isPrivateIP(cellData).done(function () {
+                        $(td).html('<a href="javascript:void(0)" data-toggle="modal" data-target="#ip-info-modal">'+ cellData + '</a>');
+                    }).fail(function () {
                         external_ip = '<span class="external-ip-tooltip" data-toggle="tooltip" title="External IP"><i class="fa fa-map-marker fa-fw"></i></span>';
                         $(td).html('<a href="javascript:void(0)" data-toggle="modal" data-target="#ip-info-modal">'+ external_ip + cellData + '</a>');
                     });
@@ -147,7 +153,7 @@ history_table_options = {
                     } else if (rowData['transcode_decision'] === 'direct play') {
                         transcode_dec = '<span class="transcode-tooltip" data-toggle="tooltip" title="Direct Play"><i class="fa fa-play-circle fa-fw"></i></span>';
                     }
-                    $(td).html('<div><a href="#" data-target="#info-modal" data-toggle="modal"><div style="float: left;">' + transcode_dec + '&nbsp;' + cellData + '</div></a></div>');
+                    $(td).html('<a href="#" data-target="#info-modal" data-toggle="modal">' + transcode_dec + '&nbsp;' + cellData + '</a>');
                 }
             },
             "width": "10%",
@@ -157,7 +163,7 @@ history_table_options = {
             "targets": [7],
             "data": "full_title",
             "createdCell": function (td, cellData, rowData, row, col) {
-                if (cellData !== '') {
+                if (cellData) {
                     var icon = '';
                     var icon_title = '';
                     var parent_info = '';
@@ -171,24 +177,24 @@ history_table_options = {
                         if (rowData['year']) { parent_info = ' (' + rowData['year'] + ')'; }
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="' + icon_title + '"><i class="fa ' + icon + ' fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, fallback) + '" data-height="120" data-width="80">' + cellData + parent_info + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key'], rowData['guid'], history, rowData['live']) + '"><div style="float: left;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key'], rowData['guid'], history, rowData['live']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'episode') {
                         icon = (rowData['live']) ? 'fa-broadcast-tower' : 'fa-television';
                         icon_title = (rowData['live']) ? 'Live TV' : 'Episode';
-                        if (!isNaN(parseInt(rowData['parent_media_index'])) && !isNaN(parseInt(rowData['media_index']))) { parent_info = ' (S' + rowData['parent_media_index'] + ' &middot; E' + rowData['media_index'] + ')'; }
+                        if (!isNaN(parseInt(rowData['parent_media_index'])) && !isNaN(parseInt(rowData['media_index']))) { parent_info = ' (' + short_season(rowData['parent_title']) + ' &middot; E' + rowData['media_index'] + ')'; }
                         else if (rowData['live'] && rowData['originally_available_at']) { parent_info = ' (' + rowData['originally_available_at'] + ')'; }
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="' + icon_title + '"><i class="fa ' + icon + ' fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, fallback) + '" data-height="120" data-width="80">' + cellData + parent_info + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key'], rowData['guid'], history, rowData['live']) + '"><div style="float: left;" >' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key'], rowData['guid'], history, rowData['live']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'track') {
                         if (rowData['parent_title']) { parent_info = ' (' + rowData['parent_title'] + ')'; }
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Track"><i class="fa fa-music fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 300, null, null, null, 'cover') + '" data-height="80" data-width="80">' + cellData + parent_info + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key'], rowData['guid'], history, rowData['live']) + '"><div style="float: left;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key'], rowData['guid'], history, rowData['live']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'clip') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Clip"><i class="fa fa-video-camera fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, fallback) + '" data-height="120" data-width="80">' + cellData + parent_info + '</span>';
-                        $(td).html('<div class="history-title"><div style="float: left;">' + media_type + '&nbsp;' + thumb_popover + '</div></div>');
+                        $(td).html('<div class="history-title">' + media_type + '&nbsp;' + thumb_popover + '</div>');
                     } else {
                         $(td).html('<a href="' + page('info', rowData['rating_key']) + '">' + cellData + '</a>');
                     }
@@ -241,7 +247,7 @@ history_table_options = {
         },
         {
             "targets": [11],
-            "data": "duration",
+            "data": "play_duration",
             "render": function (data, type, full) {
                 if (data !== null) {
                     return Math.round(moment.duration(data, 'seconds').as('minutes')) + ' mins';
@@ -257,17 +263,21 @@ history_table_options = {
             "targets": [12],
             "data": "watched_status",
             "createdCell": function (td, cellData, rowData, row, col) {
+                var circleValue = "";
                 if (cellData == 1) {
-                    $(td).html('<span class="watched-tooltip" data-toggle="tooltip" title="' + rowData['percent_complete'] + '%"><i class="fa fa-lg fa-circle"></i></span>');
+                    circleValue = " circle-full";
+                } else if (cellData == 0.75) {
+                    circleValue = " circle-three-quarter";
                 } else if (cellData == 0.5) {
-                    $(td).html('<span class="watched-tooltip" data-toggle="tooltip" title="' + rowData['percent_complete'] + '%"><i class="fa fa-lg fa-adjust fa-rotate-180"></i></span>');
-                } else {
-                    $(td).html('<span class="watched-tooltip" data-toggle="tooltip" title="' + rowData['percent_complete'] + '%"><i class="fa fa-lg fa-circle-o"></i></span>');
+                    circleValue = " circle-half";
+                } else if (cellData == 0.25) {
+                    circleValue = " circle-quarter";
                 }
+                $(td).html('<span class="watched-tooltip" data-toggle="tooltip" title="' + rowData['percent_complete'] + '%"><div class="circle' + circleValue + '" /></span>');
             },
             "searchable": false,
             "orderable": false,
-            "className": "no-wrap",
+            "className": "no-wrap watched-status",
             "width": "2%"
         },
     ],
@@ -284,6 +294,7 @@ history_table_options = {
         $('body').popover({
             selector: '[data-toggle="popover"]',
             html: true,
+            sanitize: false,
             container: 'body',
             trigger: 'hover',
             placement: 'right',
@@ -347,6 +358,14 @@ history_table_options = {
         if (rowData['state'] !== null) {
             $(row).addClass('current-activity-row');
         }
+
+        if (rowData['user_is_archived']) {
+            $(row).addClass('archived-user');
+        }
+
+        if (rowData['library_is_archived']) {
+            $(row).addClass('archived-library');
+        }
     }
 };
 
@@ -372,7 +391,10 @@ $('.history_table').on('click', '> tbody > tr > td.modal-control-ip', function (
     var rowData = row.data();
 
     $.get('get_ip_address_details', {
-        ip_address: rowData['ip_address']
+        ip_address: rowData['ip_address'],
+        location: rowData['location'],
+        secure: rowData['secure'],
+        relayed: rowData['relayed']
     }).then(function (jqXHR) {
         $("#ip-info-modal").html(jqXHR);
     });
@@ -432,7 +454,7 @@ $('.history_table').on('click', '> tbody > tr > td.expand-history a', function (
     var tr = $(this).closest('tr');
     var row = history_table.row(tr);
     var rowData = row.data();
-    
+
     $(this).find('i.fa').toggleClass('fa-plus-circle').toggleClass('fa-minus-circle');
 
     if (row.child.isShown()) {
@@ -457,7 +479,7 @@ function childTableOptions(rowData) {
     history_child_options.lengthChange = false;
     history_child_options.info = false;
     history_child_options.pageLength = 10;
-    history_child_options.bStateSave = false;
+    history_child_options.saveState = false;
     history_child_options.ajax = {
         url: 'get_history',
         type: 'post',
@@ -465,11 +487,16 @@ function childTableOptions(rowData) {
             return {
                 json_data: JSON.stringify(d),
                 grouping: false,
-                reference_id: rowData['reference_id']
+                reference_id: rowData['reference_id'],
+                // The parent row is already shown, so show its plays even if the user is archived
+                include_archived: 1
             };
+        },
+        error: function(xhr, error, thrown) {
+            showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
         }
     }
-    history_child_options.fnDrawCallback = function (settings) {
+    history_child_options.drawCallback = function (settings) {
         $('#ajaxMsg').fadeOut();
 
         // Create the tooltips.
@@ -480,6 +507,7 @@ function childTableOptions(rowData) {
         $('.watched-tooltip').tooltip({ container: 'body' });
         $('.thumb-tooltip').popover({
             html: true,
+            sanitize: false,
             container: 'body',
             trigger: 'hover',
             placement: 'right',
@@ -518,7 +546,7 @@ function childTableFormat(rowData) {
                 '<th align="left" id="started">Started</th>' +
                 '<th align="left" id="paused_counter">Paused</th>' +
                 '<th align="left" id="stopped">Stopped</th>' +
-                '<th align="left" id="duration">Duration</th>' +
+                '<th align="left" id="play_duration">Duration</th>' +
                 '<th align="left" id="percent_complete"></th>' +
             '</tr>' +
             '</thead>' +
@@ -567,7 +595,10 @@ function createChildTable(row, rowData) {
         var childRowData = childRow.data();
 
         $.get('get_ip_address_details', {
-            ip_address: childRowData['ip_address']
+            ip_address: childRowData['ip_address'],
+            location: rowData['location'],
+            secure: rowData['secure'],
+            relayed: rowData['relayed']
         }).then(function (jqXHR) {
             $("#ip-info-modal").html(jqXHR);
         });
@@ -600,4 +631,3 @@ function createChildTable(row, rowData) {
         });
     });
 }
-

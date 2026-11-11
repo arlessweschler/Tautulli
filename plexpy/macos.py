@@ -16,6 +16,7 @@
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import signal
 import subprocess
 import sys
 import plistlib
@@ -29,26 +30,23 @@ except ImportError:
 
 if HAS_PYOBJC:
     import rumps
+    from PyObjCTools import MachSignals
 
 import plexpy
-if plexpy.PYTHON2:
-    import common
-    import logger
-    import versioncheck
-else:
-    from plexpy import common
-    from plexpy import logger
-    from plexpy import versioncheck
+from plexpy import common
+from plexpy import logger
+from plexpy import versioncheck
 
 
 class MacOSSystemTray(object):
     def __init__(self):
         self.image_dir = os.path.join(plexpy.PROG_DIR, 'data/interfaces/', plexpy.CONFIG.INTERFACE, 'images')
+        self.icon = os.path.join(self.image_dir, 'logo-flat-white.ico')
 
         if plexpy.UPDATE_AVAILABLE:
-            self.icon = os.path.join(self.image_dir, 'logo-circle-update.ico')
+            self.update_title = 'Check for Updates - Update Available!'
         else:
-            self.icon = os.path.join(self.image_dir, 'logo-circle.ico')
+            self.update_title = 'Check for Updates'
 
         self.menu = [
             rumps.MenuItem('Open Tautulli', callback=self.tray_open),
@@ -56,7 +54,7 @@ class MacOSSystemTray(object):
             rumps.MenuItem('Start Tautulli at Login', callback=self.tray_startup),
             rumps.MenuItem('Open Browser when Tautulli Starts', callback=self.tray_browser),
             None,
-            rumps.MenuItem('Check for Updates', callback=self.tray_check_update),
+            rumps.MenuItem(self.update_title, callback=self.tray_check_update),
             rumps.MenuItem('Restart', callback=self.tray_restart),
             rumps.MenuItem('Quit', callback=self.tray_quit)
         ]
@@ -65,14 +63,18 @@ class MacOSSystemTray(object):
         self.menu[2].state = plexpy.CONFIG.LAUNCH_STARTUP
         self.menu[3].state = plexpy.CONFIG.LAUNCH_BROWSER
 
-        self.tray_icon = rumps.App(common.PRODUCT, icon=self.icon, menu=self.menu, quit_button=None)
+        self.tray_icon = rumps.App(common.PRODUCT, icon=self.icon, template=True,
+                                   menu=self.menu, quit_button=None)
 
     def start(self):
         logger.info("Launching MacOS menu bar icon.")
+        # Python runs signal handlers on the main thread, which the menu bar run loop blocks.
+        # MachSignals delivers SIGTERM through the run loop to the Quit menu item handler.
+        MachSignals.signal(signal.SIGTERM, self.tray_quit)
         try:
             self.tray_icon.run()
         except Exception as e:
-            logger.error("Unable to launch menu bar icon: %s." % e)
+            logger.exception("Unable to launch menu bar icon: %s." % e)
 
     def shutdown(self):
         rumps.quit_application()
@@ -98,6 +100,9 @@ class MacOSSystemTray(object):
     def tray_update(self, tray_icon):
         if plexpy.UPDATE_AVAILABLE:
             plexpy.SIGNAL = 'update'
+        else:
+            self.update_title = 'Check for Updates - No Update Available'
+            self.menu[5].title = self.update_title
 
     def tray_restart(self, tray_icon):
         plexpy.SIGNAL = 'restart'
@@ -107,10 +112,10 @@ class MacOSSystemTray(object):
 
     def change_tray_update_icon(self):
         if plexpy.UPDATE_AVAILABLE:
-            self.icon = os.path.join(self.image_dir, 'logo-circle-update.ico')
+            self.update_title = 'Check for Updates - Update Available!'
         else:
-            self.icon = os.path.join(self.image_dir, 'logo-circle.ico')
-        self.update(icon=self.icon)
+            self.update_title = 'Check for Updates'
+        self.menu[5].title = self.update_title
 
     def change_tray_icons(self):
         self.tray_icon.menu['Start Tautulli at Login'].state = plexpy.CONFIG.LAUNCH_STARTUP
@@ -157,10 +162,12 @@ def set_startup():
         plist_file_path = os.path.join(launch_agents, plist_file)
 
         exe = sys.executable
+        args = plexpy.ARGS or []
+        run_args = [arg for arg in args if arg != '--nolaunch']
         if plexpy.FROZEN:
-            args = [exe]
+            args = [exe] + run_args
         else:
-            args = [exe, plexpy.FULL_PATH]
+            args = [exe, plexpy.FULL_PATH] + run_args
 
         plist_dict = {
             'Label': common.PRODUCT,
@@ -172,7 +179,8 @@ def set_startup():
             if not os.path.exists(launch_agents):
                 try:
                     os.makedirs(launch_agents)
-                except OSError:
+                except OSError as e:
+                    logger.error("Failed to create MacOS launch agents folder: %s", e)
                     return False
 
             with open(plist_file_path, 'wb') as f:

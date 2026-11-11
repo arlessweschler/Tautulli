@@ -15,43 +15,59 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
 from io import open
 
 import os
 
 import plexpy
-if plexpy.PYTHON2:
-    import helpers
-    import logger
-else:
-    from plexpy import helpers
-    from plexpy import logger
+from plexpy import helpers
+from plexpy import logger
 
 
-def get_log_tail(window=20, parsed=True, log_type="server"):
+def list_plex_logs():
+    logs_dir = plexpy.CONFIG.PMS_LOGS_FOLDER
 
-    if plexpy.CONFIG.PMS_LOGS_FOLDER:
-        log_file = ""
-        if log_type == "server":
-            log_file = os.path.join(plexpy.CONFIG.PMS_LOGS_FOLDER, 'Plex Media Server.log')
-        elif log_type == "scanner":
-            log_file = os.path.join(plexpy.CONFIG.PMS_LOGS_FOLDER, 'Plex Media Scanner.log')
-    else:
+    if not logs_dir or logs_dir and not os.path.exists(logs_dir):
         return []
 
+    log_files = []
+    for file in os.listdir(logs_dir):
+        if file.startswith('Plex Transcoder Statistics'):
+            # Plex Transcoder Statistics is an XML file
+            continue
+        if os.path.isfile(os.path.join(logs_dir, file)):
+            name, ext = os.path.splitext(file)
+            if ext == '.log' and not name[-1].isdigit():
+                log_files.append(name)
+
+    return log_files
+
+
+def get_log_tail(window=20, parsed=True, log_file=''):
+    if not plexpy.CONFIG.PMS_LOGS_FOLDER:
+        return []
+
+    log_file = (log_file or 'Plex Media Server') + '.log'
+    log_file = os.path.join(plexpy.CONFIG.PMS_LOGS_FOLDER, log_file)
+
+    if not helpers.is_subdir(log_file, plexpy.CONFIG.PMS_LOGS_FOLDER):
+        logger.warn('Plex log file %r is outside the Plex logs folder.', log_file)
+        return
+
     try:
-        logfile = open(log_file, "r", encoding="utf-8")
+        logfile = open(log_file, 'rb')
     except IOError as e:
         logger.error('Unable to open Plex Log file. %s' % e)
         return []
 
-    log_lines = tail(logfile, window)
+    log_lines = [line.decode('utf-8', errors='replace') for line in tail(logfile, window)]
 
     if parsed:
         line_error = False
         clean_lines = []
         for i in log_lines:
+            if not i.strip():
+                continue
             try:
                 log_time = i.split(' [')[0]
                 log_level = i.split('] ', 1)[1].split(' - ', 1)[0]
@@ -64,7 +80,7 @@ def get_log_tail(window=20, parsed=True, log_type="server"):
                 clean_lines.append(full_line)
 
         if line_error:
-            logger.error('Tautulli was unable to parse some lines of the Plex Media Server log.')
+            logger.warn('Tautulli was unable to parse some lines of the Plex Media Server log.')
 
         return clean_lines
     else:
@@ -74,7 +90,6 @@ def get_log_tail(window=20, parsed=True, log_type="server"):
 
         return raw_lines
 
-    return log_lines
 
 # http://stackoverflow.com/a/13790289/2405162
 def tail(f, lines=1, _buffer=4098):

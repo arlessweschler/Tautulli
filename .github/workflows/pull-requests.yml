@@ -1,0 +1,27 @@
+name: Pull Requests
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, edited, reopened]
+
+jobs:
+  check-branch:
+    name: Check Pull Request
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Check Target Branch
+        uses: Vankka/pr-target-branch-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          target: "master beta"
+          exclude: nightly
+          change-to: nightly
+          comment: |
+            Pull requests must be made to the `nightly` branch.
+            
+            The base branch of this PR has been automatically changed to `nightly`, please check that there are no merge conflicts.
+
+            Thanks.

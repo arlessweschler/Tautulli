@@ -15,40 +15,62 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals
-
 from io import open
 import os
+import queue
+import shlex
+import threading
 
 from apscheduler.triggers.cron import CronTrigger
 import email.utils
 
 import plexpy
-if plexpy.PYTHON2:
-    import database
-    import helpers
-    import logger
-    import newsletters
-else:
-    from plexpy import database
-    from plexpy import helpers
-    from plexpy import logger
-    from plexpy import newsletters
+from plexpy import database
+from plexpy import helpers
+from plexpy import logger
+from plexpy import newsletters
 
 
 NEWSLETTER_SCHED = None
+NEWSLETTER_QUEUE = queue.Queue()
+
+
+def process_queue():
+    while True:
+        params = NEWSLETTER_QUEUE.get()
+
+        if params is None:
+            break
+        elif params:
+            try:
+                notify(**params)
+            except Exception as e:
+                logger.exception("Tautulli NewsletterHandler :: Newsletter thread exception: %s" % e)
+
+        NEWSLETTER_QUEUE.task_done()
+
+    logger.info("Tautulli NewsletterHandler :: Newsletter thread exiting...")
+
+
+def start_thread():
+    # Newsletters build on their own worker so a long newsletter render
+    # cannot stall playback notifications behind it
+    logger.info("Tautulli NewsletterHandler :: Starting background newsletter handler thread.")
+    thread = threading.Thread(target=process_queue)
+    thread.daemon = True
+    thread.start()
 
 
 def add_newsletter_each(newsletter_id=None, notify_action=None, **kwargs):
     if not notify_action:
-        logger.debug("Tautulli NewsletterHandler :: Notify called but no action received.")
+        logger.warn("Tautulli NewsletterHandler :: Notify called but no action received.")
         return
 
     data = {'newsletter': True,
             'newsletter_id': newsletter_id,
             'notify_action': notify_action}
     data.update(kwargs)
-    plexpy.NOTIFY_QUEUE.put(data)
+    NEWSLETTER_QUEUE.put(data)
 
 
 def schedule_newsletters(newsletter_id=None):
@@ -66,24 +88,38 @@ def schedule_newsletters(newsletter_id=None):
 
 
 def schedule_newsletter_job(newsletter_job_id, name='', func=None, remove_job=False, args=None, cron=None):
-    # apscheduler day_of_week uses 0-6 = mon-sun
     if cron:
-        cron = cron.split(' ')
-        cron[4] = str((int(cron[4]) - 1) % 7) if cron[4].isdigit() else cron[4]
-        cron = ' '.join(cron)
+        values = shlex.split(cron)
+        # apscheduler day_of_week uses 0-6 = mon-sun
+        values[4] = str((int(values[4]) - 1) % 7) if values[4].isdigit() else values[4]
 
     if NEWSLETTER_SCHED.get_job(newsletter_job_id):
         if remove_job:
             NEWSLETTER_SCHED.remove_job(newsletter_job_id)
             logger.info("Tautulli NewsletterHandler :: Removed scheduled newsletter: %s" % name)
         else:
-            NEWSLETTER_SCHED.reschedule_job(
-                newsletter_job_id, args=args, trigger=CronTrigger.from_crontab(cron))
-            logger.info("Tautulli NewsletterHandler :: Re-scheduled newsletter: %s" % name)
+            try:
+                NEWSLETTER_SCHED.reschedule_job(
+                    newsletter_job_id, args=args, trigger=CronTrigger(
+                        minute=values[0], hour=values[1], day=values[2], month=values[3], day_of_week=values[4],
+                        timezone=plexpy.SYS_TIMEZONE
+                    )
+                )
+                logger.info("Tautulli NewsletterHandler :: Re-scheduled newsletter: %s" % name)
+            except ValueError as e:
+                logger.error("Tautulli NewsletterHandler :: Failed to re-schedule newsletter: %s" % e)
     elif not remove_job:
-        NEWSLETTER_SCHED.add_job(
-            func, args=args, id=newsletter_job_id, trigger=CronTrigger.from_crontab(cron))
-        logger.info("Tautulli NewsletterHandler :: Scheduled newsletter: %s" % name)
+        try:
+            NEWSLETTER_SCHED.add_job(
+                func, args=args, id=newsletter_job_id, trigger=CronTrigger(
+                    minute=values[0], hour=values[1], day=values[2], month=values[3], day_of_week=values[4],
+                    timezone=plexpy.SYS_TIMEZONE
+                ),
+                misfire_grace_time=None
+            )
+            logger.info("Tautulli NewsletterHandler :: Scheduled newsletter: %s" % name)
+        except ValueError as e:
+            logger.error("Tautulli NewsletterHandler :: Failed to schedule newsletter: %s" % e)
 
 
 def notify(newsletter_id=None, notify_action=None, **kwargs):
@@ -92,6 +128,7 @@ def notify(newsletter_id=None, notify_action=None, **kwargs):
     newsletter_config = newsletters.get_newsletter_config(newsletter_id=newsletter_id)
 
     if not newsletter_config:
+        logger.error("Tautulli NewsletterHandler :: Unable to prepare newsletter: no config found for newsletter_id %s." % newsletter_id)
         return
 
     if notify_action in ('test', 'api'):
@@ -106,17 +143,17 @@ def notify(newsletter_id=None, notify_action=None, **kwargs):
     email_msg_id = email.utils.make_msgid()
     email_reply_msg_id = get_last_newsletter_email_msg_id(newsletter_id=newsletter_id, notify_action=notify_action)
 
-    newsletter_agent = newsletters.get_agent_class(newsletter_id=newsletter_id,
-                                                   newsletter_id_name=newsletter_config['id_name'],
-                                                   agent_id=newsletter_config['agent_id'],
+    newsletter_agent = newsletters.get_agent_class(agent_id=newsletter_config['agent_id'],
                                                    config=newsletter_config['config'],
                                                    email_config=newsletter_config['email_config'],
+                                                   newsletter_id=newsletter_id,
+                                                   newsletter_id_name=newsletter_config['id_name'],
                                                    subject=subject,
                                                    body=body,
                                                    message=message,
                                                    email_msg_id=email_msg_id,
-                                                   email_reply_msg_id=email_reply_msg_id
-                                                   )
+                                                   email_reply_msg_id=email_reply_msg_id)
+    newsletter_agent.retrieve_data_and_build_text()
 
     # Set the newsletter state in the db
     newsletter_log_id = set_notify_state(newsletter=newsletter_config,
@@ -137,6 +174,7 @@ def notify(newsletter_id=None, notify_action=None, **kwargs):
 
     if success:
         set_notify_success(newsletter_log_id)
+        logger.info("Tautulli NewsletterHandler :: Newsletter sent for newsletter_id %s." % newsletter_id)
         return True
 
 
@@ -146,10 +184,9 @@ def set_notify_state(newsletter, notify_action, subject, body, message, filename
     if newsletter and notify_action:
         db = database.MonitorDatabase()
 
-        keys = {'timestamp': helpers.timestamp(),
-                'uuid': newsletter_uuid}
-
-        values = {'newsletter_id': newsletter['id'],
+        values = {'timestamp': helpers.timestamp(),
+                  'uuid': newsletter_uuid,
+                  'newsletter_id': newsletter['id'],
                   'agent_id': newsletter['agent_id'],
                   'agent_name': newsletter['agent_name'],
                   'notify_action': notify_action,
@@ -163,26 +200,22 @@ def set_notify_state(newsletter, notify_action, subject, body, message, filename
                   'email_msg_id': email_msg_id,
                   'filename': filename}
 
-        db.upsert(table_name='newsletter_log', key_dict=keys, value_dict=values)
-        return db.last_insert_id()
+        return db.insert(table_name='newsletter_log', value_dict=values)
     else:
         logger.error("Tautulli NewsletterHandler :: Unable to set notify state.")
 
 
 def set_notify_success(newsletter_log_id):
-    keys = {'id': newsletter_log_id}
-    values = {'success': 1}
-
     db = database.MonitorDatabase()
-    db.upsert(table_name='newsletter_log', key_dict=keys, value_dict=values)
+    db.action("UPDATE newsletter_log SET success = 1 WHERE id = ?", [newsletter_log_id])
 
 
 def get_last_newsletter_email_msg_id(newsletter_id, notify_action):
     db = database.MonitorDatabase()
 
-    result = db.select_single('SELECT email_msg_id FROM newsletter_log '
-                              'WHERE newsletter_id = ? AND notify_action = ? AND success = 1 '
-                              'ORDER BY timestamp DESC LIMIT 1', [newsletter_id, notify_action])
+    result = db.select_single("SELECT email_msg_id FROM newsletter_log "
+                              "WHERE newsletter_id = ? AND notify_action = ? AND success = 1 "
+                              "ORDER BY timestamp DESC LIMIT 1", [newsletter_id, notify_action])
 
     if result:
         return result['email_msg_id']
@@ -192,13 +225,13 @@ def get_newsletter(newsletter_uuid=None, newsletter_id_name=None):
     db = database.MonitorDatabase()
 
     if newsletter_uuid:
-        result = db.select_single('SELECT start_date, end_date, uuid, filename FROM newsletter_log '
-                                  'WHERE uuid = ?', [newsletter_uuid])
+        result = db.select_single("SELECT start_date, end_date, uuid, filename FROM newsletter_log "
+                                  "WHERE uuid = ?", [newsletter_uuid])
     elif newsletter_id_name:
-        result = db.select_single('SELECT start_date, end_date, uuid, filename FROM newsletter_log '
-                                  'JOIN newsletters ON newsletters.id = newsletter_log.newsletter_id '
-                                  'WHERE id_name = ? AND notify_action != "test" '
-                                  'ORDER BY timestamp DESC LIMIT 1', [newsletter_id_name])
+        result = db.select_single("SELECT start_date, end_date, uuid, filename FROM newsletter_log "
+                                  "JOIN newsletters ON newsletters.id = newsletter_log.newsletter_id "
+                                  "WHERE id_name = ? AND notify_action != 'test' "
+                                  "ORDER BY timestamp DESC LIMIT 1", [newsletter_id_name])
     else:
         result = None
 

@@ -7,6 +7,10 @@ sync_table_options = {
     "order": [ [ 0, 'desc'], [ 1, 'asc'], [2, 'asc'] ],
     "pageLength": 25,
     "stateSave": true,
+    "stateSaveParams": function (settings, data) {
+        data.search.search = "";
+        data.start = 0;
+    },
     "stateDuration": 0,
     "language": {
         "search": "Search: ",
@@ -51,9 +55,9 @@ sync_table_options = {
             "createdCell": function (td, cellData, rowData, row, col) {
                 if (cellData !== '') {
                     if (rowData['user_id']) {
-                        $(td).html('<a href="' + page('user', rowData['user_id']) + '">' + cellData + '</a>');
+                        $(td).html('<a href="' + page('user', rowData['user_id']) + '" title="' + rowData['username'] + '">' + cellData + '</a>');
                     } else {
-                        $(td).html('<a href="' + page('user', null, rowData['user']) + '">' + cellData + '</a>');
+                        $(td).html('<a href="' + page('user', null, rowData['user']) + '" title="' + rowData['username'] + '">' + cellData + '</a>');
                     }
                 } else {
                     $(td).html(cellData);
@@ -66,7 +70,7 @@ sync_table_options = {
             "data": "sync_title",
             "createdCell": function (td, cellData, rowData, row, col) {
                 if (cellData !== '') {
-                    if (rowData['rating_key']) {
+                    if (rowData['rating_key'] && !rowData['rating_key'].includes(',')) {
                         $(td).html('<a href="' + page('info', rowData['rating_key']) + '">' + cellData + '</a>');
                     } else {
                         $(td).html(cellData);

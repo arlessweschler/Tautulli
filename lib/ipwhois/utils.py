@@ -1,4 +1,4 @@
-# Copyright (c) 2013-2019 Philip Hane
+# Copyright (c) 2013-2024 Philip Hane
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -23,7 +23,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 import sys
-from xml.dom.minidom import parseString
+from defusedxml.minidom import parseString
 from os import path
 import re
 import copy
@@ -61,56 +61,56 @@ log = logging.getLogger(__name__)
 IETF_RFC_REFERENCES = {
     # IPv4
     'RFC 1122, Section 3.2.1.3':
-    'http://tools.ietf.org/html/rfc1122#section-3.2.1.3',
-    'RFC 1918': 'http://tools.ietf.org/html/rfc1918',
-    'RFC 3927': 'http://tools.ietf.org/html/rfc3927',
-    'RFC 5736': 'http://tools.ietf.org/html/rfc5736',
-    'RFC 5737': 'http://tools.ietf.org/html/rfc5737',
-    'RFC 3068': 'http://tools.ietf.org/html/rfc3068',
-    'RFC 2544': 'http://tools.ietf.org/html/rfc2544',
-    'RFC 3171': 'http://tools.ietf.org/html/rfc3171',
-    'RFC 919, Section 7': 'http://tools.ietf.org/html/rfc919#section-7',
+    'https://tools.ietf.org/html/rfc1122#section-3.2.1.3',
+    'RFC 1918': 'https://tools.ietf.org/html/rfc1918',
+    'RFC 3927': 'https://tools.ietf.org/html/rfc3927',
+    'RFC 5736': 'https://tools.ietf.org/html/rfc5736',
+    'RFC 5737': 'https://tools.ietf.org/html/rfc5737',
+    'RFC 3068': 'https://tools.ietf.org/html/rfc3068',
+    'RFC 2544': 'https://tools.ietf.org/html/rfc2544',
+    'RFC 3171': 'https://tools.ietf.org/html/rfc3171',
+    'RFC 919, Section 7': 'https://tools.ietf.org/html/rfc919#section-7',
     # IPv6
-    'RFC 4291, Section 2.7': 'http://tools.ietf.org/html/rfc4291#section-2.7',
-    'RFC 4291': 'http://tools.ietf.org/html/rfc4291',
+    'RFC 4291, Section 2.7': 'https://tools.ietf.org/html/rfc4291#section-2.7',
+    'RFC 4291': 'https://tools.ietf.org/html/rfc4291',
     'RFC 4291, Section 2.5.2':
-    'http://tools.ietf.org/html/rfc4291#section-2.5.2',
+    'https://tools.ietf.org/html/rfc4291#section-2.5.2',
     'RFC 4291, Section 2.5.3':
-    'http://tools.ietf.org/html/rfc4291#section-2.5.3',
+    'https://tools.ietf.org/html/rfc4291#section-2.5.3',
     'RFC 4291, Section 2.5.6':
-    'http://tools.ietf.org/html/rfc4291#section-2.5.6',
+    'https://tools.ietf.org/html/rfc4291#section-2.5.6',
     'RFC 4291, Section 2.5.7':
-    'http://tools.ietf.org/html/rfc4291#section-2.5.7',
+    'https://tools.ietf.org/html/rfc4291#section-2.5.7',
     'RFC 4193': 'https://tools.ietf.org/html/rfc4193'
 }
 
 IP_REGEX = (
     r'(?P<ip>'
     # IPv4
-    '(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.)){3}'
-    '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
+    r'(((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.)){3}'
+    r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
     # IPv6
-    '|\[?(((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:)'
-    '{6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|'
-    '2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]'
-    '{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d'
-    '\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|'
-    '((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|'
-    '2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]'
-    '{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)'
-    '(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(('
-    '(:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1'
-    '\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(('
-    '[0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4})'
-    '{0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]'
-    '?\d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:(('
-    '25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})'
-    ')|:)))(%.+)?))\]?'
+    r'|\[?(((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:)'
+    r'{6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|'
+    r'2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]'
+    r'{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d'
+    r'\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|'
+    r'((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|'
+    r'2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]'
+    r'{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)'
+    r'(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(('
+    r'(:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1'
+    r'\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(('
+    r'[0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4})'
+    r'{0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]'
+    r'?\d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:(('
+    r'25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})'
+    r')|:)))(%.+)?))\]?'
     # Optional IPv4 Port
-    '((:(6553[0-5]|655[0-2]\d|65[0-4]\d{2}|6[0-4]\d{3}|[1-5]\d{4}|[1-9]\d{0,3}'
+    r'((:(6553[0-5]|655[0-2]\d|65[0-4]\d{2}|6[0-4]\d{3}|[1-5]\d{4}|[1-9]\d{0,3}'
     # Optional CIDR block
-    '))|(\/(?:[012]\d?|3[012]?|[4-9])))?'
-    ')'
+    r'))|(\/(?:[012]\d?|3[012]?|[4-9])))?'
+    r')'
 )
 
 
@@ -212,6 +212,7 @@ def get_countries(is_legacy_xml=False):
 
         # Read the file.
         data = f.read()
+        f.close()
 
         # Check if there is data.
         if not data:  # pragma: no cover
@@ -257,6 +258,8 @@ def get_countries(is_legacy_xml=False):
 
             # Add to the countries dictionary.
             countries[code] = name
+
+        f.close()
 
     return countries
 
@@ -348,12 +351,6 @@ def ipv4_is_defined(address):
     elif query_ip.is_private:
 
         return results(True, 'Private-Use Networks', 'RFC 1918')
-
-    # New IANA Reserved
-    # TODO: Someone needs to find the RFC for this
-    elif query_ip in IPv4Network('198.97.38.0/24'):
-
-        return results(True, 'IANA Reserved', '')
 
     return results(False, '', '')
 
@@ -506,6 +503,7 @@ def unique_addresses(data=None, file_path=None):
 
         # Read the file.
         file_data = f.read()
+        f.close()
 
     pattern = re.compile(
         str(IP_REGEX),

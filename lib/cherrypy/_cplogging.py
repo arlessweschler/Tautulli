@@ -113,8 +113,6 @@ import logging
 import os
 import sys
 
-import six
-
 import cherrypy
 from cherrypy import _cperror
 
@@ -125,7 +123,6 @@ logfmt = logging.Formatter('%(message)s')
 
 
 class NullHandler(logging.Handler):
-
     """A no-op logging handler to silence the logging.lastResort handler."""
 
     def handle(self, record):
@@ -139,15 +136,16 @@ class NullHandler(logging.Handler):
 
 
 class LogManager(object):
-
     """An object to assist both simple and advanced logging.
 
     ``cherrypy.log`` is an instance of this class.
     """
 
     appid = None
-    """The id() of the Application object which owns this log manager. If this
-    is a global log manager, appid is None."""
+    """The id() of the Application object which owns this log manager.
+
+    If this is a global log manager, appid is None.
+    """
 
     error_log = None
     """The actual :class:`logging.Logger` instance for error messages."""
@@ -155,11 +153,7 @@ class LogManager(object):
     access_log = None
     """The actual :class:`logging.Logger` instance for access messages."""
 
-    access_log_format = (
-        '{h} {l} {u} {t} "{r}" {s} {b} "{f}" "{a}"'
-        if six.PY3 else
-        '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
-    )
+    access_log_format = '{h} {l} {u} {t} "{r}" {s} {b} "{f}" "{a}"'
 
     logger_root = None
     """The "top-level" logger name.
@@ -254,8 +248,7 @@ class LogManager(object):
             status = '-'
         else:
             status = response.output_status.split(b' ', 1)[0]
-            if six.PY3:
-                status = status.decode('ISO-8859-1')
+            status = status.decode('ISO-8859-1')
 
         atoms = {'h': remote.name or remote.ip,
                  'l': '-',
@@ -270,45 +263,27 @@ class LogManager(object):
                  'i': request.unique_id,
                  'z': LazyRfc3339UtcTime(),
                  }
-        if six.PY3:
-            for k, v in atoms.items():
-                if not isinstance(v, str):
-                    v = str(v)
-                v = v.replace('"', '\\"').encode('utf8')
-                # Fortunately, repr(str) escapes unprintable chars, \n, \t, etc
-                # and backslash for us. All we have to do is strip the quotes.
-                v = repr(v)[2:-1]
+        for k, v in atoms.items():
+            if not isinstance(v, str):
+                v = str(v)
+            v = v.replace('"', '\\"').encode('utf8')
+            # Fortunately, repr(str) escapes unprintable chars, \n, \t, etc
+            # and backslash for us. All we have to do is strip the quotes.
+            v = repr(v)[2:-1]
 
-                # in python 3.0 the repr of bytes (as returned by encode)
-                # uses double \'s.  But then the logger escapes them yet, again
-                # resulting in quadruple slashes.  Remove the extra one here.
-                v = v.replace('\\\\', '\\')
+            # in python 3.0 the repr of bytes (as returned by encode)
+            # uses double \'s.  But then the logger escapes them yet, again
+            # resulting in quadruple slashes.  Remove the extra one here.
+            v = v.replace('\\\\', '\\')
 
-                # Escape double-quote.
-                atoms[k] = v
+            # Escape double-quote.
+            atoms[k] = v
 
-            try:
-                self.access_log.log(
-                    logging.INFO, self.access_log_format.format(**atoms))
-            except Exception:
-                self(traceback=True)
-        else:
-            for k, v in atoms.items():
-                if isinstance(v, six.text_type):
-                    v = v.encode('utf8')
-                elif not isinstance(v, str):
-                    v = str(v)
-                # Fortunately, repr(str) escapes unprintable chars, \n, \t, etc
-                # and backslash for us. All we have to do is strip the quotes.
-                v = repr(v)[1:-1]
-                # Escape double-quote.
-                atoms[k] = v.replace('"', '\\"')
-
-            try:
-                self.access_log.log(
-                    logging.INFO, self.access_log_format % atoms)
-            except Exception:
-                self(traceback=True)
+        try:
+            self.access_log.log(
+                logging.INFO, self.access_log_format.format(**atoms))
+        except Exception:
+            self(traceback=True)
 
     def time(self):
         """Return now() in Apache Common Log Format (no timezone)."""
@@ -342,8 +317,8 @@ class LogManager(object):
     def screen(self):
         """Turn stderr/stdout logging on or off.
 
-        If you set this to True, it'll add the appropriate StreamHandler for
-        you. If you set it to False, it will remove the handler.
+        If you set this to True, it'll add the appropriate StreamHandler
+        for you. If you set it to False, it will remove the handler.
         """
         h = self._get_builtin_handler
         has_h = h(self.error_log, 'screen') or h(self.access_log, 'screen')
@@ -439,7 +414,6 @@ class LogManager(object):
 
 
 class WSGIErrorHandler(logging.Handler):
-
     "A handler class which writes logging records to environ['wsgi.errors']."
 
     def flush(self):
@@ -477,6 +451,8 @@ class WSGIErrorHandler(logging.Handler):
 
 class LazyRfc3339UtcTime(object):
     def __str__(self):
-        """Return now() in RFC3339 UTC Format."""
-        now = datetime.datetime.now()
-        return now.isoformat('T') + 'Z'
+        """Return datetime in RFC3339 UTC Format."""
+        iso_formatted_now = datetime.datetime.now(
+            datetime.timezone.utc,
+        ).isoformat('T')
+        return f'{iso_formatted_now!s}Z'

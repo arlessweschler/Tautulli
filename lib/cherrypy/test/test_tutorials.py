@@ -1,9 +1,5 @@
 import sys
-import imp
-import types
 import importlib
-
-import six
 
 import cherrypy
 from cherrypy.test import helper
@@ -13,21 +9,17 @@ class TutorialTest(helper.CPWebCase):
 
     @classmethod
     def setup_server(cls):
-        """
-        Mount something so the engine starts.
-        """
+        """Mount something so the engine starts."""
         class Dummy:
             pass
         cherrypy.tree.mount(Dummy())
 
     @staticmethod
     def load_module(name):
-        """
-        Import or reload tutorial module as needed.
-        """
+        """Import or reload tutorial module as needed."""
         target = 'cherrypy.tutorial.' + name
         if target in sys.modules:
-            module = imp.reload(sys.modules[target])
+            module = importlib.reload(sys.modules[target])
         else:
             module = importlib.import_module(target)
         return module
@@ -39,8 +31,6 @@ class TutorialTest(helper.CPWebCase):
         root = getattr(module, root_name)
         conf = getattr(module, 'tutconf')
         class_types = type,
-        if six.PY2:
-            class_types += types.ClassType,
         if isinstance(root, class_types):
             root = root()
         cherrypy.tree.mount(root, config=conf)
@@ -84,7 +74,7 @@ class TutorialTest(helper.CPWebCase):
 
             <ul>
                 <li><a href="http://del.icio.us">del.icio.us</a></li>
-                <li><a href="http://www.cherrypy.org">CherryPy</a></li>
+                <li><a href="http://www.cherrypy.dev">CherryPy</a></li>
             </ul>
 
             <p>[<a href="../">Return to links page</a>]</p>'''
@@ -172,7 +162,7 @@ class TutorialTest(helper.CPWebCase):
         self.assertHeader('Content-Disposition',
                           # Make sure the filename is quoted.
                           'attachment; filename="pdf_file.pdf"')
-        self.assertEqual(len(self.body), 85698)
+        self.assertEqual(len(self.body), 11961)
 
     def test10HTTPErrors(self):
         self.setup_tutorial('tut10_http_errors', 'HTTPErrorDemo')

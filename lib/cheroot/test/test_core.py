@@ -1,16 +1,10 @@
 """Tests for managing HTTP issues (malformed requests, etc)."""
-# -*- coding: utf-8 -*-
-# vim: set fileencoding=utf-8 :
-
-from __future__ import absolute_import, division, print_function
-__metaclass__ = type
 
 import errno
 import socket
+import urllib.parse  # noqa: WPS301
 
 import pytest
-import six
-from six.moves import urllib
 
 from cheroot.test import helper
 
@@ -18,67 +12,77 @@ from cheroot.test import helper
 HTTP_BAD_REQUEST = 400
 HTTP_LENGTH_REQUIRED = 411
 HTTP_NOT_FOUND = 404
+HTTP_REQUEST_ENTITY_TOO_LARGE = 413
 HTTP_OK = 200
 HTTP_VERSION_NOT_SUPPORTED = 505
+
+
+def _munge(string):
+    """Encode PATH_INFO correctly depending on Python version.
+
+    WSGI 1.0 is a mess around Unicode. Create endpoints
+    that match the PATH_INFO that it produces.
+    """
+    return string.encode('utf-8').decode('latin-1')
+
+
+class WSGICallables:
+    """Controller for serving WSGI apps."""
+
+    @staticmethod
+    def hello(req, resp):
+        """Render Hello world."""
+        return 'Hello world!'
+
+    @staticmethod
+    def body_required(req, resp):
+        """Render Hello world or set 411."""
+        if req.environ.get('Content-Length', None) is None:
+            resp.status = '411 Length Required'
+            return None
+        return 'Hello world!'
+
+    @staticmethod
+    def query_string(req, resp):
+        """Render QUERY_STRING value."""
+        return req.environ.get('QUERY_STRING', '')
+
+    @staticmethod
+    def asterisk(req, resp):
+        """Render request method value."""
+        # pylint: disable=possibly-unused-variable
+        method = req.environ.get('REQUEST_METHOD', 'NO METHOD FOUND')
+        return f'Got asterisk URI path with {method} method'
 
 
 class HelloController(helper.Controller):
     """Controller for serving WSGI apps."""
 
-    def hello(req, resp):
-        """Render Hello world."""
-        return 'Hello world!'
-
-    def body_required(req, resp):
-        """Render Hello world or set 411."""
-        if req.environ.get('Content-Length', None) is None:
-            resp.status = '411 Length Required'
-            return
-        return 'Hello world!'
-
-    def query_string(req, resp):
-        """Render QUERY_STRING value."""
-        return req.environ.get('QUERY_STRING', '')
-
-    def asterisk(req, resp):
-        """Render request method value."""
-        method = req.environ.get('REQUEST_METHOD', 'NO METHOD FOUND')
-        tmpl = 'Got asterisk URI path with {method} method'
-        return tmpl.format(**locals())
-
-    def _munge(string):
-        """Encode PATH_INFO correctly depending on Python version.
-
-        WSGI 1.0 is a mess around unicode. Create endpoints
-        that match the PATH_INFO that it produces.
-        """
-        if six.PY2:
-            return string
-        return string.encode('utf-8').decode('latin-1')
-
     handlers = {
-        '/hello': hello,
-        '/no_body': hello,
-        '/body_required': body_required,
-        '/query_string': query_string,
-        _munge('/привіт'): hello,
-        _munge('/Юххууу'): hello,
-        '/\xa0Ðblah key 0 900 4 data': hello,
-        '/*': asterisk,
+        '/hello': WSGICallables.hello,
+        '/no_body': WSGICallables.hello,
+        '/body_required': WSGICallables.body_required,
+        '/query_string': WSGICallables.query_string,
+        # FIXME: Unignore the pylint rules in pylint >= 2.15.4.
+        # Refs:
+        # * https://github.com/PyCQA/pylint/issues/6592
+        # * https://github.com/PyCQA/pylint/pull/7395
+        # pylint: disable-next=too-many-function-args
+        _munge('/привіт'): WSGICallables.hello,
+        # pylint: disable-next=too-many-function-args
+        _munge('/Юххууу'): WSGICallables.hello,
+        '/\xa0Ðblah key 0 900 4 data': WSGICallables.hello,
+        '/*': WSGICallables.asterisk,
     }
 
 
 def _get_http_response(connection, method='GET'):
-    c = connection
-    kwargs = {'strict': c.strict} if hasattr(c, 'strict') else {}
-    # Python 3.2 removed the 'strict' feature, saying:
-    # "http.client now always assumes HTTP/1.x compliant servers."
-    return c.response_class(c.sock, method=method, **kwargs)
+    return connection.response_class(connection.sock, method=method)
 
 
 @pytest.fixture
 def testing_server(wsgi_server_client):
-    """Attach a WSGI app to the given server and pre-configure it."""
+    """Attach a WSGI app to the given server and preconfigure it."""
     wsgi_server = wsgi_server_client.server_instance
     wsgi_server.wsgi_app = HelloController()
     wsgi_server.max_request_body_size = 30000000
@@ -90,6 +94,21 @@ def testing_server(wsgi_server_client):
 def test_client(testing_server):
     """Get and return a test client out of the given server."""
     return testing_server.server_client
+
+
+@pytest.fixture
+def testing_server_with_defaults(wsgi_server_client):
+    """Attach a WSGI app to the given server and preconfigure it."""
+    wsgi_server = wsgi_server_client.server_instance
+    wsgi_server.wsgi_app = HelloController()
+    wsgi_server.server_client = wsgi_server_client
+    return wsgi_server
+
+
+@pytest.fixture
+def test_client_with_defaults(testing_server_with_defaults):
+    """Get and return a test client out of the given server."""
+    return testing_server_with_defaults.server_client
 
 
 def test_http_connect_request(test_client):
@@ -108,7 +127,7 @@ def test_normal_request(test_client):
 
 
 def test_query_string_request(test_client):
-    """Check that GET param is parsed well."""
+    """Check that GET parameter is parsed well."""
     status_line, _, actual_resp_body = test_client.get(
         '/query_string?test=True',
     )
@@ -123,7 +142,7 @@ def test_query_string_request(test_client):
         '/hello',  # plain
         '/query_string?test=True',  # query
         '/{0}?{1}={2}'.format(  # quoted unicode
-            *map(urllib.parse.quote, ('Юххууу', 'ї', 'йо'))
+            *map(urllib.parse.quote, ('Юххууу', 'ї', 'йо')),
         ),
     ),
 )
@@ -134,7 +153,6 @@ def test_parse_acceptable_uri(test_client, uri):
     assert actual_status == HTTP_OK
 
 
-@pytest.mark.xfail(six.PY2, reason='Fails on Python 2')
 def test_parse_uri_unsafe_uri(test_client):
     """Test that malicious URI does not allow HTTP injection.
 
@@ -170,7 +188,7 @@ def test_parse_uri_invalid_uri(test_client):
     Invalid request line test case: it should only contain US-ASCII.
     """
     c = test_client.get_connection()
-    c._output(u'GET /йопта! HTTP/1.1'.encode('utf-8'))
+    c._output('GET /йопта! HTTP/1.1'.encode())
     c._send_output()
     response = _get_http_response(c, method='GET')
     response.begin()
@@ -246,6 +264,8 @@ def test_no_content_length(test_client):
     assert actual_status == HTTP_OK
     assert actual_resp_body == b'Hello world!'
 
+    c.close()  # deal with the resource warning
+
 
 def test_content_length_required(test_client):
     """Test POST query with body failing because of missing Content-Length."""
@@ -261,31 +281,61 @@ def test_content_length_required(test_client):
     actual_status = response.status
     assert actual_status == HTTP_LENGTH_REQUIRED
 
+    c.close()  # deal with the resource warning
+
+
+@pytest.mark.xfail(
+    reason='https://github.com/cherrypy/cheroot/issues/106',
+    strict=False,  # sometimes it passes
+)
+def test_large_request(test_client_with_defaults):
+    """Test GET query with maliciously large Content-Length."""
+    # If the server's max_request_body_size is not set (i.e. is set to 0)
+    # then this will result in an `OverflowError: Python int too large to
+    # convert to C ssize_t` in the server.
+    # We expect that this should instead return that the request is too
+    # large.
+    c = test_client_with_defaults.get_connection()
+    c.putrequest('GET', '/hello')
+    c.putheader('Content-Length', str(2**64))
+    c.endheaders()
+
+    response = c.getresponse()
+    actual_status = response.status
+
+    assert actual_status == HTTP_REQUEST_ENTITY_TOO_LARGE
+
 
 @pytest.mark.parametrize(
-    'request_line,status_code,expected_body',
+    ('request_line', 'status_code', 'expected_body'),
     (
         (
             b'GET /',  # missing proto
-            HTTP_BAD_REQUEST, b'Malformed Request-Line',
+            HTTP_BAD_REQUEST,
+            b'Malformed Request-Line',
         ),
         (
             b'GET / HTTPS/1.1',  # invalid proto
-            HTTP_BAD_REQUEST, b'Malformed Request-Line: bad protocol',
+            HTTP_BAD_REQUEST,
+            b'Malformed Request-Line: bad protocol',
         ),
         (
             b'GET / HTTP/1',  # invalid version
-            HTTP_BAD_REQUEST, b'Malformed Request-Line: bad version',
+            HTTP_BAD_REQUEST,
+            b'Malformed Request-Line: bad version',
         ),
         (
             b'GET / HTTP/2.15',  # invalid ver
-            HTTP_VERSION_NOT_SUPPORTED, b'Cannot fulfill request',
+            HTTP_VERSION_NOT_SUPPORTED,
+            b'Cannot fulfill request',
         ),
     ),
 )
 def test_malformed_request_line(
-    test_client, request_line,
-    status_code, expected_body,
+    test_client,
+    request_line,
+    status_code,
+    expected_body,
 ):
     """Test missing or invalid HTTP version in Request-Line."""
     c = test_client.get_connection()
@@ -311,6 +361,8 @@ def test_malformed_http_method(test_client):
     actual_resp_body = response.read(21)
     assert actual_resp_body == b'Malformed method name'
 
+    c.close()  # deal with the resource warning
+
 
 def test_malformed_header(test_client):
     """Check that broken HTTP header results in Bad Request."""
@@ -326,6 +378,8 @@ def test_malformed_header(test_client):
     assert actual_status == HTTP_BAD_REQUEST
     actual_resp_body = response.read(20)
     assert actual_resp_body == b'Illegal header line.'
+
+    c.close()  # deal with the resource warning
 
 
 def test_request_line_split_issue_1220(test_client):
@@ -392,7 +446,7 @@ class CloseResponse:
 
     def __getitem__(self, index):
         """Ensure we don't have a body."""
-        raise IndexError()
+        raise IndexError
 
     def output(self):
         """Return self to hook the close method."""
@@ -401,7 +455,7 @@ class CloseResponse:
 
 @pytest.fixture
 def testing_server_close(wsgi_server_client):
-    """Attach a WSGI app to the given server and pre-configure it."""
+    """Attach a WSGI app to the given server and preconfigure it."""
     wsgi_server = wsgi_server_client.server_instance
     wsgi_server.wsgi_app = CloseController()
     wsgi_server.max_request_body_size = 30000000

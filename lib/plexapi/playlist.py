@@ -1,17 +1,49 @@
-# -*- coding: utf-8 -*-
-from plexapi import utils
-from plexapi.base import PlexPartialObject, Playable
-from plexapi.exceptions import BadRequest, Unsupported
-from plexapi.library import LibrarySection
-from plexapi.playqueue import PlayQueue
-from plexapi.utils import cast, toDatetime
-from plexapi.compat import quote_plus
+import re
+from itertools import groupby
+from pathlib import Path
+from urllib.parse import quote_plus, unquote
+
+from plexapi import media, utils
+from plexapi.base import Playable, PlexPartialObject, cached_data_property
+from plexapi.exceptions import BadRequest, NotFound, Unsupported
+from plexapi.library import LibrarySection, MusicSection
+from plexapi.mixins import PlaylistMixins
 
 
 @utils.registerPlexObject
-class Playlist(PlexPartialObject, Playable):
-    """ Represents a single Playlist object.
-        # TODO: Document attributes
+class Playlist(
+    PlexPartialObject, Playable, PlaylistMixins
+):
+    """ Represents a single Playlist.
+
+        Attributes:
+            TAG (str): 'Playlist'
+            TYPE (str): 'playlist'
+            addedAt (datetime): Datetime the playlist was added to the server.
+            allowSync (bool): True if you allow syncing playlists.
+            centroid (:class:`~plexapi.audio.Artist`): The centroid artist a personalized
+                'Mix For You' playlist is built around, or None for regular playlists.
+            composite (str): URL to composite image (/playlist/<ratingKey>/composite/<compositeid>)
+            content (str): The filter URI string for smart playlists.
+            duration (int): Duration of the playlist in milliseconds.
+            durationInSeconds (int): Duration of the playlist in seconds.
+            fields (List<:class:`~plexapi.media.Field`>): List of field objects.
+            guid (str): Plex GUID for the playlist (com.plexapp.agents.none://XXXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXX).
+            icon (str): Icon URI string for smart playlists.
+            key (str): API URL (/playlist/<ratingkey>).
+            leafCount (int): Number of items in the playlist view.
+            librarySectionID (int): Library section identifier (radio only)
+            librarySectionKey (str): Library section key (radio only)
+            librarySectionTitle (str): Library section title (radio only)
+            playlistType (str): 'audio', 'video', or 'photo'
+            radio (bool): If this playlist represents a radio station
+            ratingKey (int): Unique key identifying the playlist.
+            smart (bool): True if the playlist is a smart playlist.
+            summary (str): Summary of the playlist.
+            title (str): Name of the playlist.
+            titleSort (str): Title to use when sorting (defaults to title).
+            type (str): 'playlist'
+            updatedAt (datetime): Datetime the playlist was updated.
     """
     TAG = 'Playlist'
     TYPE = 'playlist'
@@ -19,29 +51,59 @@ class Playlist(PlexPartialObject, Playable):
     def _loadData(self, data):
         """ Load attribute values from Plex XML response. """
         Playable._loadData(self, data)
-        self.addedAt = toDatetime(data.attrib.get('addedAt'))
+        self.addedAt = utils.toDatetime(data.attrib.get('addedAt'))
+        self.allowSync = utils.cast(bool, data.attrib.get('allowSync'))
         self.composite = data.attrib.get('composite')  # url to thumbnail
-        self.duration = cast(int, data.attrib.get('duration'))
-        self.durationInSeconds = cast(int, data.attrib.get('durationInSeconds'))
+        self.content = data.attrib.get('content')
+        self.duration = utils.cast(int, data.attrib.get('duration'))
+        self.durationInSeconds = utils.cast(int, data.attrib.get('durationInSeconds'))
         self.guid = data.attrib.get('guid')
-        self.key = data.attrib.get('key')
-        self.key = self.key.replace('/items', '') if self.key else self.key  # FIX_BUG_50
-        self.leafCount = cast(int, data.attrib.get('leafCount'))
+        self.icon = data.attrib.get('icon')
+        self.key = data.attrib.get('key', '').replace('/items', '')  # FIX_BUG_50
+        self.leafCount = utils.cast(int, data.attrib.get('leafCount'))
+        self.librarySectionID = utils.cast(int, data.attrib.get('librarySectionID'))
+        self.librarySectionKey = data.attrib.get('librarySectionKey')
+        self.librarySectionTitle = data.attrib.get('librarySectionTitle')
         self.playlistType = data.attrib.get('playlistType')
-        self.ratingKey = cast(int, data.attrib.get('ratingKey'))
-        self.smart = cast(bool, data.attrib.get('smart'))
+        self.radio = utils.cast(bool, data.attrib.get('radio', 0))
+        self.ratingKey = utils.cast(int, data.attrib.get('ratingKey'))
+        self.smart = utils.cast(bool, data.attrib.get('smart'))
         self.summary = data.attrib.get('summary')
         self.title = data.attrib.get('title')
+        self.titleSort = data.attrib.get('titleSort', self.title)
         self.type = data.attrib.get('type')
-        self.updatedAt = toDatetime(data.attrib.get('updatedAt'))
-        self.allowSync = cast(bool, data.attrib.get('allowSync'))
-        self._items = None  # cache for self.items
+        self.updatedAt = utils.toDatetime(data.attrib.get('updatedAt'))
+
+    @cached_data_property
+    def fields(self):
+        return self.findItems(self._data, media.Field)
+
+    @cached_data_property
+    def centroid(self):
+        from plexapi.audio import Artist
+        return self.findItem(self._data, cls=Artist, centroid='1')
 
     def __len__(self):  # pragma: no cover
         return len(self.items())
 
+    def __iter__(self):  # pragma: no cover
+        for item in self.items():
+            yield item
+
+    def __contains__(self, other):  # pragma: no cover
+        return any(i.key == other.key for i in self.items())
+
+    def __getitem__(self, key):  # pragma: no cover
+        return self.items()[key]
+
+    @property
+    def thumb(self):
+        """ Alias to self.composite. """
+        return self.composite
+
     @property
     def metadataType(self):
+        """ Returns the type of metadata in the playlist (movie, track, or photo). """
         if self.isVideo:
             return 'movie'
         elif self.isAudio:
@@ -53,195 +115,390 @@ class Playlist(PlexPartialObject, Playable):
 
     @property
     def isVideo(self):
+        """ Returns True if this is a video playlist. """
         return self.playlistType == 'video'
 
     @property
     def isAudio(self):
+        """ Returns True if this is an audio playlist. """
         return self.playlistType == 'audio'
 
     @property
     def isPhoto(self):
+        """ Returns True if this is a photo playlist. """
         return self.playlistType == 'photo'
 
-    def __contains__(self, other):  # pragma: no cover
-        return any(i.key == other.key for i in self.items())
+    def _getPlaylistItemID(self, item):
+        """ Match an item to a playlist item and return the item playlistItemID. """
+        for _item in self.items():
+            if _item.ratingKey == item.ratingKey:
+                return _item.playlistItemID
+        raise NotFound(f'Item with title "{item.title}" not found in the playlist')
 
-    def __getitem__(self, key):  # pragma: no cover
-        return self.items()[key]
+    @cached_data_property
+    def _filters(self):
+        """ Cache for filters. """
+        return self._parseFilters(self.content)
 
-    def items(self):
-        """ Returns a list of all items in the playlist. """
-        if self._items is None:
-            key = '%s/items' % self.key
-            items = self.fetchItems(key)
-            self._items = items
+    def filters(self):
+        """ Returns the search filter dict for smart playlist.
+            The filter dict be passed back into :func:`~plexapi.library.LibrarySection.search`
+            to get the list of items.
+        """
+        return self._filters
+
+    @cached_data_property
+    def _section(self):
+        """ Cache for section. """
+        if not self.smart:
+            raise BadRequest('Regular playlists are not associated with a library.')
+
+        # Try to parse the library section from the content URI string
+        match = re.search(r'/library/sections/(\d+)/all', unquote(self.content or ''))
+        if match:
+            sectionKey = int(match.group(1))
+            return self._server.library.sectionByID(sectionKey)
+
+        # Try to get the library section from the first item in the playlist
+        if self.items():
+            return self.items()[0].section()
+
+        raise Unsupported('Unable to determine the library section')
+
+    def section(self):
+        """ Returns the :class:`~plexapi.library.LibrarySection` this smart playlist belongs to.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When trying to get the section for a regular playlist.
+                :class:`plexapi.exceptions.Unsupported`: When unable to determine the library section.
+        """
+        return self._section
+
+    def item(self, title):
+        """ Returns the item in the playlist that matches the specified title.
+
+            Parameters:
+                title (str): Title of the item to return.
+
+            Raises:
+                :class:`plexapi.exceptions.NotFound`: When the item is not found in the playlist.
+        """
+        for item in self.items():
+            if item.title.lower() == title.lower():
+                return item
+        raise NotFound(f'Item with title "{title}" not found in the playlist')
+
+    @cached_data_property
+    def _items(self):
+        """ Cache for items. """
+        return self._fetchItems()
+
+    def _fetchItems(self, libtype=None):
+        """ Returns a list of all items in the playlist, optionally filtered by library type. """
+        if self.radio:
+            return []
+
+        params = {'type': utils.searchType(libtype)} if libtype else {}
+        key = self._buildQueryKey(f'{self.key}/items', **params)
+        items = self.fetchItems(key)
+
+        # Cache server connections to avoid reconnecting for each item
+        _servers = {}
+        for item in items:
+            if sourceURI := getattr(item, 'sourceURI', None):
+                serverID = sourceURI.split('/')[2]
+                if serverID not in _servers:
+                    try:
+                        _servers[serverID] = self._server.myPlexAccount().resource(serverID).connect()
+                    except NotFound:
+                        # Override the server connection with None if the server is not found
+                        _servers[serverID] = None
+                item._server = _servers[serverID]
+
+        return items
+
+    def items(self, libtype=None):
+        """ Returns a list of all items in the playlist.
+
+            Parameters:
+                libtype (str): Optional filter to return items grouped by a specific library type
+                    (movie, show, season, episode, artist, album, track, photoalbum, photo).
+                    (e.g. shows in a playlist, or albums in a playlist)
+        """
+        if libtype:
+            return self._fetchItems(libtype=libtype)
         return self._items
 
-    def addItems(self, items):
-        """ Add items to a playlist. """
-        if not isinstance(items, (list, tuple)):
-            items = [items]
-        ratingKeys = []
-        for item in items:
-            if item.listType != self.playlistType:  # pragma: no cover
-                raise BadRequest('Can not mix media types when building a playlist: %s and %s' %
-                    (self.playlistType, item.listType))
-            ratingKeys.append(str(item.ratingKey))
-        uuid = items[0].section().uuid
-        ratingKeys = ','.join(ratingKeys)
-        key = '%s/items%s' % (self.key, utils.joinArgs({
-            'uri': 'library://%s/directory//library/metadata/%s' % (uuid, ratingKeys)
-        }))
-        result = self._server.query(key, method=self._server._session.put)
-        self.reload()
-        return result
+    def get(self, title):
+        """ Alias to :func:`~plexapi.playlist.Playlist.item`. """
+        return self.item(title)
 
-    def removeItem(self, item):
-        """ Remove a file from a playlist. """
-        key = '%s/items/%s' % (self.key, item.playlistItemID)
-        result = self._server.query(key, method=self._server._session.delete)
-        self.reload()
-        return result
+    def addItems(self, items):
+        """ Add items to the playlist.
+
+            Parameters:
+                items (List): List of :class:`~plexapi.audio.Audio`, :class:`~plexapi.video.Video`,
+                    or :class:`~plexapi.photo.Photo` objects to be added to the playlist.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When trying to add items to a smart playlist.
+        """
+        if self.smart:
+            raise BadRequest('Cannot add items to a smart playlist.')
+
+        if items and not isinstance(items, (list, tuple)):
+            items = [items]
+
+        # Group items by server to maintain order when adding items from multiple servers
+        for server, _items in groupby(items, key=lambda item: item._server):
+
+            ratingKeys = []
+            for item in _items:
+                if item.listType != self.playlistType:  # pragma: no cover
+                    raise BadRequest(f'Can not mix media types when building a playlist: '
+                                     f'{self.playlistType} and {item.listType}')
+                ratingKeys.append(str(item.ratingKey))
+
+            ratingKeys = ','.join(ratingKeys)
+            uri = f'{server._uriRoot()}/library/metadata/{ratingKeys}'
+
+            args = {'uri': uri}
+            key = f"{self.key}/items{utils.joinArgs(args)}"
+            self._server.query(key, method=self._server._session.put)
+
+        return self
+
+    def removeItems(self, items):
+        """ Remove items from the playlist.
+
+            Parameters:
+                items (List): List of :class:`~plexapi.audio.Audio`, :class:`~plexapi.video.Video`,
+                    or :class:`~plexapi.photo.Photo` objects to be removed from the playlist.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When trying to remove items from a smart playlist.
+                :class:`plexapi.exceptions.NotFound`: When the item does not exist in the playlist.
+        """
+        if self.smart:
+            raise BadRequest('Cannot remove items from a smart playlist.')
+
+        if items and not isinstance(items, (list, tuple)):
+            items = [items]
+
+        for item in items:
+            playlistItemID = self._getPlaylistItemID(item)
+            key = f'{self.key}/items/{playlistItemID}'
+            self._server.query(key, method=self._server._session.delete)
+        return self
 
     def moveItem(self, item, after=None):
-        """ Move a to a new position in playlist. """
-        key = '%s/items/%s/move' % (self.key, item.playlistItemID)
-        if after:
-            key += '?after=%s' % after.playlistItemID
-        result = self._server.query(key, method=self._server._session.put)
-        self.reload()
-        return result
+        """ Move an item to a new position in the playlist.
 
-    def edit(self, title=None, summary=None):
-        """ Edit playlist. """
-        key = '/library/metadata/%s%s' % (self.ratingKey, utils.joinArgs({'title': title, 'summary': summary}))
-        result = self._server.query(key, method=self._server._session.put)
-        self.reload()
-        return result
+            Parameters:
+                items (obj): :class:`~plexapi.audio.Audio`, :class:`~plexapi.video.Video`,
+                    or :class:`~plexapi.photo.Photo` objects to be moved in the playlist.
+                after (obj): :class:`~plexapi.audio.Audio`, :class:`~plexapi.video.Video`,
+                    or :class:`~plexapi.photo.Photo` objects to move the item after in the playlist.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When trying to move items in a smart playlist.
+                :class:`plexapi.exceptions.NotFound`: When the item or item after does not exist in the playlist.
+        """
+        if self.smart:
+            raise BadRequest('Cannot move items in a smart playlist.')
+
+        playlistItemID = self._getPlaylistItemID(item)
+        key = f'{self.key}/items/{playlistItemID}/move'
+
+        if after:
+            afterPlaylistItemID = self._getPlaylistItemID(after)
+            key += f'?after={afterPlaylistItemID}'
+
+        self._server.query(key, method=self._server._session.put)
+        return self
+
+    def updateFilters(self, limit=None, sort=None, filters=None, **kwargs):
+        """ Update the filters for a smart playlist.
+
+            Parameters:
+                limit (int): Limit the number of items in the playlist.
+                sort (str or list, optional): A string of comma separated sort fields
+                    or a list of sort fields in the format ``column:dir``.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                filters (dict): A dictionary of advanced filters.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                **kwargs (dict): Additional custom filters to apply to the search results.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When trying update filters for a regular playlist.
+        """
+        if not self.smart:
+            raise BadRequest('Cannot update filters for a regular playlist.')
+
+        section = self.section()
+        searchKey = section._buildSearchKey(
+            sort=sort, libtype=section.METADATA_TYPE, limit=limit, filters=filters, **kwargs)
+        uri = f'{self._server._uriRoot()}{searchKey}'
+
+        args = {'uri': uri}
+        key = f"{self.key}/items{utils.joinArgs(args)}"
+        self._server.query(key, method=self._server._session.put)
+        return self
+
+    def _edit(self, **kwargs):
+        """ Actually edit the playlist. """
+        if isinstance(self._edits, dict):
+            self._edits.update(kwargs)
+            return self
+
+        key = f'{self.key}{utils.joinArgs(kwargs)}'
+        self._server.query(key, method=self._server._session.put)
+        return self
 
     def delete(self):
-        """ Delete playlist. """
-        return self._server.query(self.key, method=self._server._session.delete)
-
-    def playQueue(self, *args, **kwargs):
-        """ Create a playqueue from this playlist. """
-        return PlayQueue.create(self._server, self, *args, **kwargs)
+        """ Delete the playlist. """
+        self._server.query(self.key, method=self._server._session.delete)
 
     @classmethod
     def _create(cls, server, title, items):
-        """ Create a playlist. """
+        """ Create a regular playlist. """
+        if not items:
+            raise BadRequest('Must include items to add when creating new playlist.')
+
         if items and not isinstance(items, (list, tuple)):
             items = [items]
+
+        listType = items[0].listType
         ratingKeys = []
         for item in items:
-            if item.listType != items[0].listType:  # pragma: no cover
-                raise BadRequest('Can not mix media types when building a playlist')
+            if item.listType != listType:  # pragma: no cover
+                raise BadRequest('Can not mix media types when building a playlist.')
             ratingKeys.append(str(item.ratingKey))
+
         ratingKeys = ','.join(ratingKeys)
-        uuid = items[0].section().uuid
-        key = '/playlists%s' % utils.joinArgs({
-            'uri': 'library://%s/directory//library/metadata/%s' % (uuid, ratingKeys),
-            'type': items[0].listType,
-            'title': title,
-            'smart': 0
-        })
+        uri = f'{server._uriRoot()}/library/metadata/{ratingKeys}'
+
+        args = {'uri': uri, 'type': listType, 'title': title, 'smart': 0}
+        key = f"/playlists{utils.joinArgs(args)}"
         data = server.query(key, method=server._session.post)[0]
         return cls(server, data, initpath=key)
 
     @classmethod
-    def create(cls, server, title, items=None, section=None, limit=None, smart=False, **kwargs):
-        """Create a playlist.
-
-        Parameters:
-            server (:class:`~plexapi.server.PlexServer`): Server your connected to.
-            title (str): Title of the playlist.
-            items (Iterable): Iterable of objects that should be in the playlist.
-            section (:class:`~plexapi.library.LibrarySection`, str):
-            limit (int): default None.
-            smart (bool): default False.
-
-            **kwargs (dict): is passed to the filters. For a example see the search method.
-
-        Returns:
-            :class:`plexapi.playlist.Playlist`: an instance of created Playlist.
-        """
-        if smart:
-            return cls._createSmart(server, title, section, limit, **kwargs)
-
-        else:
-            return cls._create(server, title, items)
-
-    @classmethod
-    def _createSmart(cls, server, title, section, limit=None, **kwargs):
-        """ Create a Smart playlist. """
-
+    def _createSmart(cls, server, title, section, limit=None, libtype=None, sort=None, filters=None, **kwargs):
+        """ Create a smart playlist. """
         if not isinstance(section, LibrarySection):
             section = server.library.section(section)
 
-        sectionType = utils.searchType(section.type)
-        sectionId = section.key
-        uuid = section.uuid
-        uri = 'library://%s/directory//library/sections/%s/all?type=%s' % (uuid,
-                                                                           sectionId,
-                                                                           sectionType)
-        if limit:
-            uri = uri + '&limit=%s' % str(limit)
+        libtype = libtype or section.METADATA_TYPE
 
-        for category, value in kwargs.items():
-            sectionChoices = section.listChoices(category)
-            for choice in sectionChoices:
-                if str(choice.title).lower() == str(value).lower():
-                    uri = uri + '&%s=%s' % (category.lower(), str(choice.key))
+        searchKey = section._buildSearchKey(
+            sort=sort, libtype=libtype, limit=limit, filters=filters, **kwargs)
+        uri = f'{server._uriRoot()}{searchKey}'
 
-        uri = uri + '&sourceType=%s' % sectionType
-        key = '/playlists%s' % utils.joinArgs({
-            'uri': uri,
-            'type': section.CONTENT_TYPE,
-            'title': title,
-            'smart': 1,
-        })
+        args = {'uri': uri, 'type': section.CONTENT_TYPE, 'title': title, 'smart': 1}
+        key = f"/playlists{utils.joinArgs(args)}"
         data = server.query(key, method=server._session.post)[0]
         return cls(server, data, initpath=key)
 
+    @classmethod
+    def _createFromM3U(cls, server, title, section, m3ufilepath):
+        """ Create a playlist from uploading an m3u file. """
+        if not isinstance(section, LibrarySection):
+            section = server.library.section(section)
+
+        if not isinstance(section, MusicSection):
+            raise BadRequest('Can only create playlists from m3u files in a music library.')
+
+        args = {'sectionID': section.key, 'path': m3ufilepath}
+        key = f"/playlists/upload{utils.joinArgs(args)}"
+        server.query(key, method=server._session.post)
+        try:
+            return server.playlists(sectionId=section.key, guid__endswith=m3ufilepath)[0].editTitle(title).reload()
+        except IndexError:
+            raise BadRequest('Failed to create playlist from m3u file.') from None
+
+    @classmethod
+    def create(cls, server, title, section=None, items=None, smart=False, limit=None,
+               libtype=None, sort=None, filters=None, m3ufilepath=None, **kwargs):
+        """ Create a playlist.
+
+            Parameters:
+                server (:class:`~plexapi.server.PlexServer`): Server to create the playlist on.
+                title (str): Title of the playlist.
+                section (:class:`~plexapi.library.LibrarySection`, str): Smart playlists and m3u import only,
+                    the library section to create the playlist in.
+                items (List): Regular playlists only, list of :class:`~plexapi.audio.Audio`,
+                    :class:`~plexapi.video.Video`, or :class:`~plexapi.photo.Photo` objects to be added to the playlist.
+                smart (bool): True to create a smart playlist. Default False.
+                limit (int): Smart playlists only, limit the number of items in the playlist.
+                libtype (str): Smart playlists only, the specific type of content to filter
+                    (movie, show, season, episode, artist, album, track, photoalbum, photo).
+                sort (str or list, optional): Smart playlists only, a string of comma separated sort fields
+                    or a list of sort fields in the format ``column:dir``.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                filters (dict): Smart playlists only, a dictionary of advanced filters.
+                    See :func:`~plexapi.library.LibrarySection.search` for more info.
+                m3ufilepath (str): Music playlists only, the full file path to an m3u file to import.
+                    Note: This will overwrite any playlist previously created from the same m3u file.
+                **kwargs (dict): Smart playlists only, additional custom filters to apply to the
+                    search results. See :func:`~plexapi.library.LibrarySection.search` for more info.
+
+            Raises:
+                :class:`plexapi.exceptions.BadRequest`: When no items are included to create the playlist.
+                :class:`plexapi.exceptions.BadRequest`: When mixing media types in the playlist.
+                :class:`plexapi.exceptions.BadRequest`: When attempting to import m3u file into non-music library.
+                :class:`plexapi.exceptions.BadRequest`: When failed to import m3u file.
+
+            Returns:
+                :class:`~plexapi.playlist.Playlist`: A new instance of the created Playlist.
+        """
+        if m3ufilepath:
+            return cls._createFromM3U(server, title, section, m3ufilepath)
+        elif smart:
+            if items:
+                raise BadRequest('Cannot create a smart playlist with items.')
+            return cls._createSmart(server, title, section, limit, libtype, sort, filters, **kwargs)
+        else:
+            return cls._create(server, title, items)
+
     def copyToUser(self, user):
-        """ Copy playlist to another user account. """
-        from plexapi.server import PlexServer
-        myplex = self._server.myPlexAccount()
-        user = myplex.user(user)
-        # Get the token for your machine.
-        token = user.get_token(self._server.machineIdentifier)
-        # Login to your server using your friends credentials.
-        user_server = PlexServer(self._server._baseurl, token)
-        return self.create(user_server, self.title, self.items())
+        """ Copy playlist to another user account.
+
+            Parameters:
+                user (:class:`~plexapi.myplex.MyPlexUser` or str): `MyPlexUser` object, username,
+                    email, or user id of the user to copy the playlist to.
+        """
+        userServer = self._server.switchUser(user)
+        return self.create(server=userServer, title=self.title, items=self.items())
 
     def sync(self, videoQuality=None, photoResolution=None, audioBitrate=None, client=None, clientId=None, limit=None,
              unwatched=False, title=None):
-        """ Add current playlist as sync item for specified device.
-            See :func:`plexapi.myplex.MyPlexAccount.sync()` for possible exceptions.
+        """ Add the playlist as a sync item for the specified device.
+            See :func:`~plexapi.myplex.MyPlexAccount.sync` for possible exceptions.
 
             Parameters:
                 videoQuality (int): idx of quality of the video, one of VIDEO_QUALITY_* values defined in
-                                    :mod:`plexapi.sync` module. Used only when playlist contains video.
+                                    :mod:`~plexapi.sync` module. Used only when playlist contains video.
                 photoResolution (str): maximum allowed resolution for synchronized photos, see PHOTO_QUALITY_* values in
-                                       the module :mod:`plexapi.sync`. Used only when playlist contains photos.
+                                       the module :mod:`~plexapi.sync`. Used only when playlist contains photos.
                 audioBitrate (int): maximum bitrate for synchronized music, better use one of MUSIC_BITRATE_* values
-                                    from the module :mod:`plexapi.sync`. Used only when playlist contains audio.
-                client (:class:`plexapi.myplex.MyPlexDevice`): sync destination, see
-                                                               :func:`plexapi.myplex.MyPlexAccount.sync`.
-                clientId (str): sync destination, see :func:`plexapi.myplex.MyPlexAccount.sync`.
+                                    from the module :mod:`~plexapi.sync`. Used only when playlist contains audio.
+                client (:class:`~plexapi.myplex.MyPlexDevice`): sync destination, see
+                                                               :func:`~plexapi.myplex.MyPlexAccount.sync`.
+                clientId (str): sync destination, see :func:`~plexapi.myplex.MyPlexAccount.sync`.
                 limit (int): maximum count of items to sync, unlimited if `None`.
                 unwatched (bool): if `True` watched videos wouldn't be synced.
-                title (str): descriptive title for the new :class:`plexapi.sync.SyncItem`, if empty the value would be
+                title (str): descriptive title for the new :class:`~plexapi.sync.SyncItem`, if empty the value would be
                              generated from metadata of current photo.
 
             Raises:
-                :class:`plexapi.exceptions.BadRequest`: when playlist is not allowed to sync.
-                :class:`plexapi.exceptions.Unsupported`: when playlist content is unsupported.
+                :exc:`~plexapi.exceptions.BadRequest`: When playlist is not allowed to sync.
+                :exc:`~plexapi.exceptions.Unsupported`: When playlist content is unsupported.
 
             Returns:
-                :class:`plexapi.sync.SyncItem`: an instance of created syncItem.
+                :class:`~plexapi.sync.SyncItem`: A new instance of the created sync item.
         """
-
         if not self.allowSync:
             raise BadRequest('The playlist is not allowed to sync')
 
@@ -255,7 +512,7 @@ class Playlist(PlexPartialObject, Playable):
         sync_item.metadataType = self.metadataType
         sync_item.machineIdentifier = self._server.machineIdentifier
 
-        sync_item.location = 'playlist:///%s' % quote_plus(self.guid)
+        sync_item.location = f'playlist:///{quote_plus(self.guid)}'
         sync_item.policy = Policy.create(limit, unwatched)
 
         if self.isVideo:
@@ -269,40 +526,12 @@ class Playlist(PlexPartialObject, Playable):
 
         return myplex.sync(sync_item, client=client, clientId=clientId)
 
-    def posters(self):
-        """ Returns list of available poster objects. :class:`~plexapi.media.Poster`. """
+    def _getWebURL(self, base=None):
+        """ Get the Plex Web URL with the correct parameters. """
+        return self._server._buildWebURL(base=base, endpoint='playlist', key=self.key)
 
-        return self.fetchItems('/library/metadata/%s/posters' % self.ratingKey)
-
-    def uploadPoster(self, url=None, filepath=None):
-        """ Upload poster from url or filepath. :class:`~plexapi.media.Poster` to :class:`~plexapi.video.Video`. """
-        if url:
-            key = '/library/metadata/%s/posters?url=%s' % (self.ratingKey, quote_plus(url))
-            self._server.query(key, method=self._server._session.post)
-        elif filepath:
-            key = '/library/metadata/%s/posters?' % self.ratingKey
-            data = open(filepath, 'rb').read()
-            self._server.query(key, method=self._server._session.post, data=data)
-
-    def setPoster(self, poster):
-        """ Set . :class:`~plexapi.media.Poster` to :class:`~plexapi.video.Video` """
-        poster.select()
-
-    def arts(self):
-        """ Returns list of available art objects. :class:`~plexapi.media.Poster`. """
-
-        return self.fetchItems('/library/metadata/%s/arts' % self.ratingKey)
-
-    def uploadArt(self, url=None, filepath=None):
-        """ Upload art from url or filepath. :class:`~plexapi.media.Poster` to :class:`~plexapi.video.Video`. """
-        if url:
-            key = '/library/metadata/%s/arts?url=%s' % (self.ratingKey, quote_plus(url))
-            self._server.query(key, method=self._server._session.post)
-        elif filepath:
-            key = '/library/metadata/%s/arts?' % self.ratingKey
-            data = open(filepath, 'rb').read()
-            self._server.query(key, method=self._server._session.post, data=data)
-
-    def setArt(self, art):
-        """ Set :class:`~plexapi.media.Poster` to :class:`~plexapi.video.Video` """
-        art.select()
+    @property
+    def metadataDirectory(self):
+        """ Returns the Plex Media Server data directory where the metadata is stored. """
+        guid_hash = utils.sha1hash(self.guid)
+        return str(Path('Metadata') / 'Playlists' / guid_hash[0] / f'{guid_hash[1:]}.bundle')

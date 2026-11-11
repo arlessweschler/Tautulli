@@ -12,12 +12,13 @@ analysis = Analysis(
         ('..\\data', 'data'),
         ('..\\CHANGELOG.md', '.'),
         ('..\\LICENSE', '.'),
+        ('..\\branch.txt', '.'),
         ('..\\version.txt', '.'),
         ('..\\lib\\ipwhois\\data', 'data')
     ],
     excludes=['FixTk', 'tcl', 'tk', '_tkinter', 'tkinter', 'Tkinter'],
     hiddenimports=['pkg_resources.py2_warn', 'cheroot.ssl', 'cheroot.ssl.builtin'],
-    cipher=block_cipher,
+    cipher=block_cipher
 )
 pyz = PYZ(
     analysis.pure,
@@ -30,7 +31,8 @@ exe = EXE(
     exclude_binaries=True,
     name='Tautulli',
     console=False,
-    icon='..\\data\\interfaces\\default\\images\\logo-circle.ico'
+    icon='..\\data\\interfaces\\default\\images\\logo-circle.ico',
+    contents_directory='.'
 )
 coll = COLLECT(
     exe,

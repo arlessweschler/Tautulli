@@ -1,29 +1,31 @@
-# -*- coding: utf-8 -*-
-
 """
 A simple library for managing the availability of ports.
 """
 
-from __future__ import print_function, division
-
-import time
-import socket
 import argparse
-import sys
-import itertools
 import contextlib
+import itertools
 import platform
-
-try:
-    from collections import abc
-except ImportError:
-    import collections as abc
+import socket
+import sys
+import time
+import urllib.parse
+from collections import abc
 
 from tempora import timing
 
 
 def client_host(server_host):
-    """Return the host on which a client can connect to the given listener."""
+    """
+    Return the host on which a client can connect to the given listener.
+
+    >>> client_host('192.168.0.1')
+    '192.168.0.1'
+    >>> client_host('0.0.0.0')
+    '127.0.0.1'
+    >>> client_host('::')
+    '::1'
+    """
     if server_host == '0.0.0.0':
         # 0.0.0.0 is INADDR_ANY, which should answer on localhost.
         return '127.0.0.1'
@@ -35,7 +37,7 @@ def client_host(server_host):
     return server_host
 
 
-class Checker(object):
+class Checker:
     def __init__(self, timeout=1.0):
         self.timeout = timeout
 
@@ -64,7 +66,7 @@ class Checker(object):
         if port is None and isinstance(host, abc.Sequence):
             host, port = host[:2]
         if platform.system() == 'Windows':
-            host = client_host(host)
+            host = client_host(host)  # pragma: nocover
         info = socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         list(itertools.starmap(self._connect, info))
 
@@ -76,11 +78,11 @@ class Checker(object):
         with contextlib.closing(s):
             try:
                 s.connect(sa)
-            except socket.error:
+            except OSError:
                 return
 
         # the connect succeeded, so the port isn't free
-        port, host = sa[:2]
+        host, port = sa[:2]
         tmpl = "Port {port} is in use on {host}."
         raise PortNotFree(tmpl.format(**locals()))
 
@@ -103,6 +105,11 @@ def free(host, port, timeout=float('Inf')):
     If timeout is None or ∞, the routine will run indefinitely.
 
     >>> free('localhost', find_available_local_port())
+
+    >>> free(None, None)
+    Traceback (most recent call last):
+    ...
+    ValueError: Host values of '' or None are not allowed.
     """
     if not host:
         raise ValueError("Host values of '' or None are not allowed.")
@@ -116,12 +123,11 @@ def free(host, port, timeout=float('Inf')):
             return
         except PortNotFree:
             if timer.expired():
-                raise Timeout("Port {port} not free on {host}.".format(**locals()))
+                raise Timeout(
+                    "Port {port} not free on {host}.".format(**locals())
+                ) from None
             # Politely wait.
             time.sleep(0.1)
-
-
-wait_for_free_port = free
 
 
 def occupied(host, port, timeout=float('Inf')):
@@ -137,6 +143,11 @@ def occupied(host, port, timeout=float('Inf')):
     Traceback (most recent call last):
     ...
     Timeout: Port ... not bound on localhost.
+
+    >>> occupied(None, None)
+    Traceback (most recent call last):
+    ...
+    ValueError: Host values of '' or None are not allowed.
     """
     if not host:
         raise ValueError("Host values of '' or None are not allowed.")
@@ -153,9 +164,6 @@ def occupied(host, port, timeout=float('Inf')):
         except PortNotFree:
             # port is occupied
             return
-
-
-wait_for_occupied_port = occupied
 
 
 def find_available_local_port():
@@ -188,20 +196,33 @@ class HostPort(str):
 
     >>> len(hp)
     15
+
+    >>> hp = HostPort('[::1]:32768')
+
+    >>> hp.host
+    '::1'
+
+    >>> hp.port
+    32768
     """
 
     @property
     def host(self):
-        host, sep, port = self.partition(':')
-        return host
+        return urllib.parse.urlparse(f'//{self}').hostname
 
     @property
     def port(self):
-        host, sep, port = self.partition(':')
-        return int(port)
+        return urllib.parse.urlparse(f'//{self}').port
+
+    @classmethod
+    def from_addr(cls, addr):
+        listen_host, port = addr[:2]
+        plain_host = client_host(listen_host)
+        host = f'[{plain_host}]' if ':' in plain_host else plain_host
+        return cls(':'.join([host, str(port)]))
 
 
-def _main():
+def _main(args=None):
     parser = argparse.ArgumentParser()
 
     def global_lookup(key):
@@ -210,13 +231,12 @@ def _main():
     parser.add_argument('target', metavar='host:port', type=HostPort)
     parser.add_argument('func', metavar='state', type=global_lookup)
     parser.add_argument('-t', '--timeout', default=None, type=float)
-    args = parser.parse_args()
+    args = parser.parse_args(args)
     try:
         args.func(args.target.host, args.target.port, timeout=args.timeout)
     except Timeout as timeout:
         print(timeout, file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
 
-if __name__ == '__main__':
-    _main()
+__name__ == '__main__' and _main()

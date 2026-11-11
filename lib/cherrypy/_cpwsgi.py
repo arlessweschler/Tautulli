@@ -1,16 +1,14 @@
 """WSGI interface (see PEP 333 and 3333).
 
 Note that WSGI environ keys and values are 'native strings'; that is,
-whatever the type of "" is. For Python 2, that's a byte string; for Python 3,
-it's a unicode string. But PEP 3333 says: "even if Python's str type is
-actually Unicode "under the hood", the content of native strings must
-still be translatable to bytes via the Latin-1 encoding!"
+whatever the type of "" is. For Python 2, that's a byte string; for
+Python 3, it's a unicode string. But PEP 3333 says: "even if Python's
+str type is actually Unicode "under the hood", the content of native
+strings must still be translatable to bytes via the Latin-1 encoding!"
 """
 
 import sys as _sys
 import io
-
-import six
 
 import cherrypy as _cherrypy
 from cherrypy._cpcompat import ntou
@@ -25,10 +23,10 @@ def downgrade_wsgi_ux_to_1x(environ):
     env1x = {}
 
     url_encoding = environ[ntou('wsgi.url_encoding')]
-    for k, v in list(environ.items()):
+    for k, v in environ.copy().items():
         if k in [ntou('PATH_INFO'), ntou('SCRIPT_NAME'), ntou('QUERY_STRING')]:
             v = v.encode(url_encoding)
-        elif isinstance(v, six.text_type):
+        elif isinstance(v, str):
             v = v.encode('ISO-8859-1')
         env1x[k.encode('ISO-8859-1')] = v
 
@@ -36,7 +34,6 @@ def downgrade_wsgi_ux_to_1x(environ):
 
 
 class VirtualHost(object):
-
     """Select a different WSGI application based on the Host header.
 
     This can be useful when running multiple sites within one CP server.
@@ -58,7 +55,10 @@ class VirtualHost(object):
         cherrypy.tree.graft(vhost)
     """
     default = None
-    """Required. The default WSGI application."""
+    """Required.
+
+    The default WSGI application.
+    """
 
     use_x_forwarded_host = True
     """If True (the default), any "X-Forwarded-Host"
@@ -67,11 +67,12 @@ class VirtualHost(object):
 
     domains = {}
     """A dict of {host header value: application} pairs.
-    The incoming "Host" request header is looked up in this dict,
-    and, if a match is found, the corresponding WSGI application
-    will be called instead of the default. Note that you often need
-    separate entries for "example.com" and "www.example.com".
-    In addition, "Host" headers may contain the port number.
+
+    The incoming "Host" request header is looked up in this dict, and,
+    if a match is found, the corresponding WSGI application will be
+    called instead of the default. Note that you often need separate
+    entries for "example.com" and "www.example.com". In addition, "Host"
+    headers may contain the port number.
     """
 
     def __init__(self, default, domains=None, use_x_forwarded_host=True):
@@ -91,7 +92,6 @@ class VirtualHost(object):
 
 
 class InternalRedirector(object):
-
     """WSGI middleware that handles raised cherrypy.InternalRedirect."""
 
     def __init__(self, nextapp, recursive=False):
@@ -139,7 +139,6 @@ class InternalRedirector(object):
 
 
 class ExceptionTrapper(object):
-
     """WSGI middleware that traps exceptions."""
 
     def __init__(self, nextapp, throws=(KeyboardInterrupt, SystemExit)):
@@ -177,10 +176,6 @@ class _TrappedResponse(object):
     def __next__(self):
         return self.trap(next, self.iter_response)
 
-    # todo: https://pythonhosted.org/six/#six.Iterator
-    if six.PY2:
-        next = __next__
-
     def close(self):
         if hasattr(self.response, 'close'):
             self.response.close()
@@ -198,7 +193,7 @@ class _TrappedResponse(object):
             if not _cherrypy.request.show_tracebacks:
                 tb = ''
             s, h, b = _cperror.bare_error(tb)
-            if six.PY3:
+            if True:
                 # What fun.
                 s = s.decode('ISO-8859-1')
                 h = [
@@ -232,15 +227,11 @@ class _TrappedResponse(object):
 
 
 class AppResponse(object):
-
     """WSGI response iterable for CherryPy applications."""
 
     def __init__(self, environ, start_response, cpapp):
         self.cpapp = cpapp
         try:
-            if six.PY2:
-                if environ.get(ntou('wsgi.version')) == (ntou('u'), 0):
-                    environ = downgrade_wsgi_ux_to_1x(environ)
             self.environ = environ
             self.run()
 
@@ -262,7 +253,7 @@ class AppResponse(object):
                     raise TypeError(tmpl % v)
                 outheaders.append((k, v))
 
-            if six.PY3:
+            if True:
                 # According to PEP 3333, when using Python 3, the response
                 # status and headers must be bytes masquerading as unicode;
                 # that is, they must be of type "str" but are restricted to
@@ -285,12 +276,11 @@ class AppResponse(object):
     def __next__(self):
         return next(self.iter_response)
 
-    # todo: https://pythonhosted.org/six/#six.Iterator
-    if six.PY2:
-        next = __next__
-
     def close(self):
-        """Close and de-reference the current request and response. (Core)"""
+        """Close and de-reference the current request and response.
+
+        (Core)
+        """
         streaming = _cherrypy.serving.response.stream
         self.cpapp.release_serving()
 
@@ -356,9 +346,6 @@ class AppResponse(object):
     }
 
     def recode_path_qs(self, path, qs):
-        if not six.PY3:
-            return
-
         # This isn't perfect; if the given PATH_INFO is in the
         # wrong encoding, it may fail to match the appropriate config
         # section URI. But meh.
@@ -396,18 +383,20 @@ class AppResponse(object):
 
 
 class CPWSGIApp(object):
-
     """A WSGI application object for a CherryPy Application."""
 
     pipeline = [
         ('ExceptionTrapper', ExceptionTrapper),
         ('InternalRedirector', InternalRedirector),
     ]
-    """A list of (name, wsgiapp) pairs. Each 'wsgiapp' MUST be a
-    constructor that takes an initial, positional 'nextapp' argument,
-    plus optional keyword arguments, and returns a WSGI application
-    (that takes environ and start_response arguments). The 'name' can
-    be any you choose, and will correspond to keys in self.config."""
+    """A list of (name, wsgiapp) pairs.
+
+    Each 'wsgiapp' MUST be a constructor that takes an initial,
+    positional 'nextapp' argument, plus optional keyword arguments, and
+    returns a WSGI application (that takes environ and start_response
+    arguments). The 'name' can be any you choose, and will correspond to
+    keys in self.config.
+    """
 
     head = None
     """Rather than nest all apps in the pipeline on each call, it's only
@@ -415,9 +404,12 @@ class CPWSGIApp(object):
     this to None again if you change self.pipeline after calling self."""
 
     config = {}
-    """A dict whose keys match names listed in the pipeline. Each
-    value is a further dict which will be passed to the corresponding
-    named WSGI callable (from the pipeline) as keyword arguments."""
+    """A dict whose keys match names listed in the pipeline.
+
+    Each value is a further dict which will be passed to the
+    corresponding named WSGI callable (from the pipeline) as keyword
+    arguments.
+    """
 
     response_class = AppResponse
     """The class to instantiate and return as the next app in the WSGI chain.
@@ -433,8 +425,8 @@ class CPWSGIApp(object):
     def tail(self, environ, start_response):
         """WSGI application callable for the actual CherryPy application.
 
-        You probably shouldn't call this; call self.__call__ instead,
-        so that any WSGI middleware in self.pipeline can run first.
+        You probably shouldn't call this; call self.__call__ instead, so
+        that any WSGI middleware in self.pipeline can run first.
         """
         return self.response_class(environ, start_response, self.cpapp)
 

@@ -1,4 +1,6 @@
-# Copyright (C) 2003-2007, 2009-2011 Nominum, Inc.
+# Copyright (C) Dnspython Contributors, see LICENSE for text of ISC license
+
+# Copyright (C) 2003-2017 Nominum, Inc.
 #
 # Permission to use, copy, modify, and distribute this software and its
 # documentation for any purpose with or without fee is hereby granted,
@@ -15,20 +17,26 @@
 
 """dnspython release version information."""
 
-MAJOR = 1
-MINOR = 14
+#: MAJOR
+MAJOR = 2
+#: MINOR
+MINOR = 8
+#: MICRO
 MICRO = 0
-RELEASELEVEL = 0x0f
+#: RELEASELEVEL
+RELEASELEVEL = 0x0F
+#: SERIAL
 SERIAL = 0
 
-if RELEASELEVEL == 0x0f:
-    version = '%d.%d.%d' % (MAJOR, MINOR, MICRO)
-elif RELEASELEVEL == 0x00:
-    version = '%d.%d.%dx%d' % \
-              (MAJOR, MINOR, MICRO, SERIAL)
-else:
-    version = '%d.%d.%d%x%d' % \
-              (MAJOR, MINOR, MICRO, RELEASELEVEL, SERIAL)
+if RELEASELEVEL == 0x0F:  # pragma: no cover  lgtm[py/unreachable-statement]
+    #: version
+    version = f"{MAJOR}.{MINOR}.{MICRO}"  # lgtm[py/unreachable-statement]
+elif RELEASELEVEL == 0x00:  # pragma: no cover  lgtm[py/unreachable-statement]
+    version = f"{MAJOR}.{MINOR}.{MICRO}dev{SERIAL}"  # lgtm[py/unreachable-statement]
+elif RELEASELEVEL == 0x0C:  # pragma: no cover  lgtm[py/unreachable-statement]
+    version = f"{MAJOR}.{MINOR}.{MICRO}rc{SERIAL}"  # lgtm[py/unreachable-statement]
+else:  # pragma: no cover  lgtm[py/unreachable-statement]
+    version = f"{MAJOR}.{MINOR}.{MICRO}{RELEASELEVEL:x}{SERIAL}"  # lgtm[py/unreachable-statement]
 
-hexversion = MAJOR << 24 | MINOR << 16 | MICRO << 8 | RELEASELEVEL << 4 | \
-    SERIAL
+#: hexversion
+hexversion = MAJOR << 24 | MINOR << 16 | MICRO << 8 | RELEASELEVEL << 4 | SERIAL

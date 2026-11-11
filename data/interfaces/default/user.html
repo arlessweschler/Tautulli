@@ -17,7 +17,6 @@ user_thumb          Returns the thumbnail for the user.
 is_home_user        Returns bool value for whether the user is part of a Plex Home.
 is_allow_sync       Returns bool value for whether the user has sync rights.
 is_restricted       Returns bool value for whether the user account is restricted.
-do_notify           Returns bool value for whether to send notifications for the user.
 keep_history        Returns bool value for whether to keep history for the user.
 
 DOCUMENTATION :: END
@@ -26,11 +25,11 @@ DOCUMENTATION :: END
 
 <%inherit file="base.html"/>
 <%!
-    from plexpy import helpers
+    from plexpy.helpers import page
 %>
 
 <%def name="headIncludes()">
-<link rel="stylesheet" href="${http_root}css/dataTables.bootstrap.css">
+<link rel="stylesheet" href="${http_root}css/dataTables.bootstrap.min.css">
 <link rel="stylesheet" href="${http_root}css/dataTables.colVis.css">
 <link rel="stylesheet" href="${http_root}css/tautulli-dataTables.css">
 </%def>
@@ -43,7 +42,9 @@ DOCUMENTATION :: END
             <div class="summary-navbar">
                 <div class="col-md-12">
                     <div class="summary-navbar-list">
-                        <ul class="list-unstyled breadcrumb"></ul>
+                        <ul class="list-unstyled breadcrumb">
+                            <li class="active">${data['friendly_name']}</li>
+                        </ul>
                     </div>
                 </div>
             </div>
@@ -51,8 +52,16 @@ DOCUMENTATION :: END
                 <div class="col-md-12">
                     <div class="table-card-back">
                         <div class="user-info-wrapper">
-                            <div class="user-info-poster-face" style="background-image: url(${data['user_thumb']});">
-                                % if not data['is_active']:
+                            <div class="user-info-poster-face" style="background-image: url(${page('pms_image_proxy', data['user_thumb'], None, 80, 80, fallback='user')});">
+                                % if data['deleted_user']:
+                                <span class="inactive-user-tooltip" data-toggle="tooltip" title="Deleted user">
+                                    <i class="fa fa-2x fa-trash-o"></i>
+                                </span>
+                                % elif data['is_archived']:
+                                <span class="inactive-user-tooltip" data-toggle="tooltip" title="Archived user">
+                                    <i class="fa fa-2x fa-archive"></i>
+                                </span>
+                                % elif not data['is_active']:
                                 <span class="inactive-user-tooltip" data-toggle="tooltip" title="User not on Plex server">
                                     <i class="fa fa-2x fa-exclamation-triangle"></i>
                                 </span>
@@ -64,15 +73,26 @@ DOCUMENTATION :: END
                                 <span id="edit-user-tooltip" data-target="tooltip" title="Edit user details">
                                     <a href="#" data-toggle="modal" data-target="#edit-user-modal" id="toggle-edit-user-modal"><i class="fa fa-pencil"></i></a>
                                 </span>
+                                <span class="user-info-account">
+                                    % if data['username'] != data['friendly_name']:
+                                    <span>${data['username']}</span>
+                                    % endif
+                                    % if data['email']:
+                                    <span>${data['email']}</span>
+                                    % endif
+                                </span>
                                 % endif
                             </div>
                             <div class="user-info-nav">
-                                <ul class="user-info-nav" role="tablist">
-                                    <li class="active"><a href="#tabs-profile" role="tab" data-toggle="tab">Profile</a></li>
-                                    <li><a id="history-tab-btn" href="#tabs-history" role="tab" data-toggle="tab">History</a></li>
-                                    <li><a id="sync-tab-btn" href="#tabs-synceditems" role="tab" data-toggle="tab">Synced Items</a></li>
-                                    <li><a id="ip-tab-btn" href="#tabs-ipaddresses" role="tab" data-toggle="tab">IP Addresses</a></li>
-                                    <li><a id="login-tab-btn" href="#tabs-tautullilogins" role="tab" data-toggle="tab">Tautulli Logins</a></li>
+                                <ul class="nav nav-list nav-pills" role="tablist">
+                                    <li class="active"><a id="nav-tabs-profile" href="#tabs-profile" role="tab" data-toggle="tab">Profile</a></li>
+                                    <li><a id="nav-tabs-history" href="#tabs-history" role="tab" data-toggle="tab">History</a></li>
+                                    <li><a id="nav-tabs-playlists" href="#tabs-playlists" role="tab" data-toggle="tab">Playlists</a></li>
+                                    % if _session['user_group'] == 'admin':
+                                    <li><a id="nav-tabs-export" href="#tabs-export" role="tab" data-toggle="tab">Export</a></li>
+                                    % endif
+                                    <li><a id="nav-tabs-ipaddresses" href="#tabs-ipaddresses" role="tab" data-toggle="tab">IP Addresses</a></li>
+                                    <li><a id="nav-tabs-tautullilogins" href="#tabs-tautullilogins" role="tab" data-toggle="tab">Tautulli Logins</a></li>
                                 </ul>
                             </div>
                         </div>
@@ -120,10 +140,10 @@ DOCUMENTATION :: END
                                     <div class="table-card-header">
                                         <ul class="nav nav-header nav-dashboard pull-right">
                                             <li>
-                                                <a href="#" id="recently-watched-page-left" class="paginate btn-gray disabled" data-id="+1"><i class="fa fa-lg fa-chevron-left"></i></a>
+                                                <a href="#" id="recently-watched-page-left" class="paginate-watched btn-gray disabled" data-id="-1"><i class="fa fa-lg fa-chevron-left"></i></a>
                                             </li>
                                             <li>
-                                                <a href="#" id="recently-watched-page-right" class="paginate btn-gray" data-id="-1"><i class="fa fa-lg fa-chevron-right"></i></a>
+                                                <a href="#" id="recently-watched-page-right" class="paginate-watched btn-gray" data-id="+1"><i class="fa fa-lg fa-chevron-right"></i></a>
                                             </li>
                                         </ul>
                                         <div class="header-bar">
@@ -154,34 +174,41 @@ DOCUMENTATION :: END
                                         </div>
                                         <div class="button-bar">
                                             % if _session['user_group'] == 'admin':
-                                            <div class="alert alert-danger alert-edit" role="alert" id="row-edit-mode-alert"><i class="fa fa-exclamation-triangle"></i>&nbspSelect rows to delete. Data is deleted upon exiting delete mode.</div>
                                             <div class="btn-group">
                                                 <button class="btn btn-danger btn-edit" data-toggle="button" aria-pressed="false" autocomplete="off" id="row-edit-mode">
                                                     <i class="fa fa-trash-o"></i> Delete mode
-                                                </button>&nbsp;
+                                                </button>
                                             </div>
                                             % endif
                                             <div class="btn-group" data-toggle="buttons" id="media_type-selection">
-                                                <label class="btn btn-dark">
-                                                    <input type="radio" name="media_type-filter" id="history-all" value="all" autocomplete="off"> All
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="media_type-filter" id="history-media_type-movie" value="movie" autocomplete="off"><i class="fa fa-film"></i> Movies
                                                 </label>
-                                                <label class="btn btn-dark">
-                                                    <input type="radio" name="media_type-filter" id="history-movie" value="movie" autocomplete="off"> Movies
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="media_type-filter" id="history-media_type-episode" value="episode" autocomplete="off"><i class="fa fa-television"></i> TV Shows
                                                 </label>
-                                                <label class="btn btn-dark">
-                                                    <input type="radio" name="media_type-filter" id="history-episode" value="episode" autocomplete="off"> TV Shows
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="media_type-filter" id="history-media_type-track" value="track" autocomplete="off"><i class="fa fa-music"></i> Music
                                                 </label>
-                                                <label class="btn btn-dark">
-                                                    <input type="radio" name="media_type-filter" id="history-track" value="track" autocomplete="off"> Music
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="media_type-filter" id="history-media_type-live" value="live" autocomplete="off"><i class="fa fa-broadcast-tower"></i> Live TV
                                                 </label>
-                                                <label class="btn btn-dark">
-                                                    <input type="radio" name="media_type-filter" id="history-live" value="live" autocomplete="off"> Live TV
+                                            </div>
+                                            <div class="btn-group" data-toggle="buttons" id="transcode_decision-selection">
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="transcode_decision-filter" id="history-transcode_decision-direct_play" value="direct play" autocomplete="off"><i class="fa fa-play-circle"></i> Direct Play
+                                                </label>
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="transcode_decision-filter" id="history-transcode_decision-direct_stream" value="copy" autocomplete="off"><i class="fa fa-stream"></i> Direct Stream
+                                                </label>
+                                                <label class="btn btn-dark btn-filter">
+                                                    <input type="checkbox" name="transcode_decision-filter" id="history-transcode_decision-transcode" value="transcode" autocomplete="off"><i class="fa fa-server"></i> Transcode
                                                 </label>
                                             </div>
                                             <div class="btn-group">
                                                 <button class="btn btn-dark refresh-history-button" id="refresh-history-list"><i class="fa fa-refresh"></i> Refresh history</button>
                                             </div>
-                                            <div class="btn-group colvis-button-bar" id="button-bar-history"></div>
+                                            <div class="btn-group colvis-button-bar" id="button-bar-history"><div class="ColVis"><button class="btn btn-dark"><span><i class="fa fa-columns"></i> Select columns</span></button></div></div>
                                         </div>
                                     </div>
                                     <div class="table-card-back">
@@ -199,7 +226,7 @@ DOCUMENTATION :: END
                                                     <th align="left" id="started">Started</th>
                                                     <th align="left" id="paused_counter">Paused</th>
                                                     <th align="left" id="stopped">Stopped</th>
-                                                    <th align="left" id="duration">Duration</th>
+                                                    <th align="left" id="play_duration">Duration</th>
                                                     <th align="left" id="percent_complete"></th>
                                                 </tr>
                                             </thead>
@@ -210,49 +237,43 @@ DOCUMENTATION :: END
                             </div>
                         </div>
                     </div>
-                    <div role="tabpanel" class="tab-pane" id="tabs-synceditems">
+                    <div role="tabpanel" class="tab-pane" id="tabs-playlists">
                         <div class="container-fluid">
                             <div class="row">
                                 <div class="col-md-12">
                                     <div class='table-card-header'>
                                         <div class="header-bar">
                                             <span>
-                                                <i class="fa fa-cloud-download"></i> Synced Items for <strong>
+                                                <i class="fa fa-list-alt"></i> Playlists for <strong>
                                                     <span class="set-username">${data['friendly_name']}</span>
                                                 </strong>
                                             </span>
                                         </div>
                                         <div class="button-bar">
                                             % if _session['user_group'] == 'admin':
-                                            <div class="alert alert-danger alert-edit" role="alert" id="sync-row-edit-mode-alert"><i class="fa fa-exclamation-triangle"></i>&nbspSelect syncs to delete. Data is deleted upon exiting delete mode.</div>
                                             <div class="btn-group">
-                                                <button class="btn btn-danger btn-edit" data-toggle="button" aria-pressed="false" autocomplete="off" id="sync-row-edit-mode">
-                                                    <i class="fa fa-trash-o"></i> Delete mode
-                                                </button>&nbsp
+                                                <button class="btn btn-dark export-button" id="toggle-export-modal" data-toggle="modal" data-target="#export-modal"
+                                                        data-user_id="${data['user_id']}" data-media_type="playlist" data-sub_media_type="video,audio,photo"
+                                                        data-export_type="playlist">
+                                                    <i class="fa fa-file-export"></i> Export playlists
+                                                </button>
                                             </div>
                                             % endif
                                             <div class="btn-group">
-                                                <button class="btn btn-dark refresh-syncs-button" id="refresh-syncs-list"><i class="fa fa-refresh"></i> Refresh synced items</button>
+                                                <button class="btn btn-dark refresh-playlists-table-button" id="refresh-playlists-table">
+                                                    <i class="fa fa-refresh"></i> Refresh playlists
+                                                </button>
                                             </div>
-                                            <div class="btn-group colvis-button-bar" id="button-bar-sync"></div>
+                                            <div class="btn-group colvis-button-bar" id="button-bar-playlists"><div class="ColVis"><button class="btn btn-dark"><span><i class="fa fa-columns"></i> Select columns</span></button></div></div>
                                         </div>
                                     </div>
                                     <div class="table-card-back">
-                                        <table class="display sync_table" id="sync_table-UID-${data['user_id']}" width="100%">
+                                        <table class="display playlists_table" id="playlists_table-SID-${data['user_id']}" width="100%">
                                             <thead>
                                                 <tr>
-                                                    <th align="left" id="delete_row">Delete</th>
-                                                    <th align="left" id="state">State</th>
-                                                    <th align="left" id="username">Username</th>
-                                                    <th align="left" id="sync_title">Title</th>
-                                                    <th align="left" id="type">Type</th>
-                                                    <th align="left" id="sync_platform">Platform</th>
-                                                    <th align="left" id="device">Device</th>
-                                                    <th align="left" id="size">Total Size</th>
-                                                    <th align="left" id="items">Total Items</th>
-                                                    <th align="left" id="converted">Converted</th>
-                                                    <th align="left" id="downloaded">Downloaded</th>
-                                                    <th align="left" id="sync_percent_complete">Complete</th>
+                                                    <th align="left" id="playlistTitle">Playlist Title</th>
+                                                    <th align="left" id="playlistLeafCount">Playlist Items</th>
+                                                    <th align="left" id="playlistDuration">Playlist Duration</th>
                                                 </tr>
                                             </thead>
                                             <tbody></tbody>
@@ -262,6 +283,53 @@ DOCUMENTATION :: END
                             </div>
                         </div>
                     </div>
+                    % if _session['user_group'] == 'admin':
+                    <div role="tabpanel" class="tab-pane" id="tabs-export">
+                        <div class="container-fluid">
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <div class='table-card-header'>
+                                        <div class="header-bar">
+                                            <span>
+                                                <i class="fa fa-file-export"></i> Metadata Exports for <strong>
+                                                    <span class="set-username">${data['friendly_name']}</span>
+                                                </strong>
+                                            </span>
+                                        </div>
+                                        <div class="button-bar">
+                                            <div class="btn-group">
+                                                <button class="btn btn-dark refresh-export-table-button" id="refresh-export-table">
+                                                    <i class="fa fa-refresh"></i> Refresh exports
+                                                </button>
+                                            </div>
+                                            <div class="btn-group colvis-button-bar" id="button-bar-export"><div class="ColVis"><button class="btn btn-dark"><span><i class="fa fa-columns"></i> Select columns</span></button></div></div>
+                                        </div>
+                                    </div>
+                                    <div class="table-card-back">
+                                        <table class="display export_table" id="export_table-SID-${data['user_id']}" width="100%">
+                                            <thead>
+                                                <tr>
+                                                    <th align="left" id="timestamp">Exported At</th>
+                                                    <th align="left" id="media_type_title">Media Type</th>
+                                                    <th align="left" id="rating_key">Rating Key</th>
+                                                    <th align="left" id="filename">Filename</th>
+                                                    <th align="left" id="file_format">File Format</th>
+                                                    <th align="left" id="metadata_level">Metadata Level</th>
+                                                    <th align="left" id="media_info_level">Media Info Level</th>
+                                                    <th align="left" id="media_info_level">Custom Fields</th>
+                                                    <th align="left" id="file_size">File Size</th>
+                                                    <th align="left" id="complete">Download</th>
+                                                    <th align="left" id="delete">Delete</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    % endif
                     <div role="tabpanel" class="tab-pane" id="tabs-ipaddresses">
                         <div class="container-fluid">
                             <div class="row">
@@ -278,6 +346,7 @@ DOCUMENTATION :: END
                                             <div class="btn-group">
                                                 <button class="btn btn-dark refresh-ip-address-button" id="refresh-ip-address-list"><i class="fa fa-refresh"></i> Refresh IP addresses</button>
                                             </div>
+                                            <div class="btn-group colvis-button-bar" id="button-bar-ip-address"><div class="ColVis"><button class="btn btn-dark"><span><i class="fa fa-columns"></i> Select columns</span></button></div></div>
                                         </div>
                                     </div>
                                     <div class="table-card-back">
@@ -315,7 +384,7 @@ DOCUMENTATION :: END
                                             <div class="btn-group">
                                                 <button class="btn btn-dark refresh-login-button" id="refresh-login-list"><i class="fa fa-refresh"></i> Refresh logins</button>
                                             </div>
-                                            <div class="btn-group colvis-button-bar" id="button-bar-login"></div>
+                                            <div class="btn-group colvis-button-bar" id="button-bar-login"><div class="ColVis"><button class="btn btn-dark"><span><i class="fa fa-columns"></i> Select columns</span></button></div></div>
                                         </div>
                                     </div>
                                     <div class="table-card-back">
@@ -329,6 +398,7 @@ DOCUMENTATION :: END
                                                     <th align="left" id="host">Host</th>
                                                     <th align="left" id="os">Operating System</th>
                                                     <th align="left" id="browser">Browser</th>
+                                                    <th align="left" id="expiry">Expiry</th>
                                                     <th align="left" id="login_success"></th>
                                                 </tr>
                                             </thead>
@@ -393,6 +463,8 @@ DOCUMENTATION :: END
         </div>
     </div>
 </div>
+<div id="export-modal" class="modal fade" tabindex="-1" role="dialog" aria-labelledby="export-modal">
+</div>
 </%def>
 
 <%def name="javascriptIncludes()">
@@ -410,17 +482,19 @@ DOCUMENTATION :: END
 
     var username = '${data['username'].replace("'", "\\'")}';
 </script>
-<script src="${http_root}js/moment-with-locale.js"></script>
 <script src="${http_root}js/tables/history_table.js${cache_param}"></script>
+<script src="${http_root}js/tables/playlists_table.js${cache_param}"></script>
+<script src="${http_root}js/tables/export_table.js${cache_param}"></script>
 <script src="${http_root}js/tables/user_ips.js${cache_param}"></script>
-<script src="${http_root}js/tables/sync_table.js${cache_param}"></script>
 <script src="${http_root}js/tables/login_logs.js${cache_param}"></script>
 <script>
     $('a[data-toggle="tab"]').on('shown.bs.tab', function (e) {
         $.fn.dataTable.tables({ visible: true, api: true }).columns.adjust();
     });
 
-    function loadHistoryTable(media_type) {
+    $(".inactive-user-tooltip").tooltip();
+
+    function loadHistoryTable(media_type, transcode_decision) {
         // Build watch history table
         history_table_options.ajax = {
             url: 'get_history',
@@ -429,42 +503,98 @@ DOCUMENTATION :: END
                 return {
                     json_data: JSON.stringify( d ),
                     user_id: user_id,
-                    media_type: media_type
+                    media_type: media_type,
+                    transcode_decision: transcode_decision,
+                    include_archived: include_archived
                 };
+            },
+            error: function(xhr, error, thrown) {
+                showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
             }
         };
         history_table = $('#history_table-UID-${data["user_id"]}').DataTable(history_table_options);
         history_table.column(2).visible(false);
 
-        var colvis = new $.fn.dataTable.ColVis(history_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', exclude: [0, 12] });
-        $(colvis.button()).appendTo('#button-bar-history');
+        var colvis = new $.fn.dataTable.ColVis(history_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', exclude: [0, 12], sAlign: 'right' });
+        $('#button-bar-history').empty().append(colvis.button());
 
         clearSearchButton('history_table-UID-${data["user_id"]}', history_table);
 
         $('#media_type-selection').on('change', function () {
             $('#media_type-selection > label').removeClass('active');
-            selected_filter = $('input[name=media_type-filter]:checked', '#media_type-selection');
+            var selected_filter = $('input[name=media_type-filter]:checked', '#media_type-selection');
             $(selected_filter).closest('label').addClass('active');
-            media_type = $(selected_filter).val();
+            media_type = $(selected_filter).map(function () { return $(this).val(); }).get().join(',');
             setLocalStorage('user_' + user_id + '-history_media_type', media_type);
+            history_table.draw();
+        });
+
+        $('#transcode_decision-selection').on('change', function () {
+            $('#transcode_decision-selection > label').removeClass('active');
+            var selected_filter = $('input[name=transcode_decision-filter]:checked', '#transcode_decision-selection');
+            $(selected_filter).closest('label').addClass('active');
+            transcode_decision = $(selected_filter).map(function () { return $(this).val(); }).get().join(',');
+            setLocalStorage('user_' + user_id + 'history_transcode_decision', transcode_decision);
             history_table.draw();
         });
     }
 
-    function loadSyncTable() {
-        // Build user sync table
-        sync_table_options.ajax = {
-             url: 'get_sync?user_id=' + user_id,
-            type: 'POST'
+    $('#nav-tabs-history').on('shown.bs.tab', function() {
+        if (typeof(history_table) === 'undefined') {
+            var media_type = getLocalStorage('user_' + user_id + '-history_media_type', 'all');
+            $.each(media_type.split(','), function (i, item) {
+                var history_media_type = $('#history-media_type-' + item);
+                history_media_type.prop('checked', true);
+                history_media_type.closest('label').addClass('active');
+            });
+
+            var transcode_decision = getLocalStorage('user_' + user_id + 'history_transcode_decision', 'all');
+            $.each(transcode_decision.split(','), function (i, item) {
+                var history_transcode_decision = $('#history-transcode_decision-' + item.replace(' ', '_'));
+                history_transcode_decision.prop('checked', true);
+                history_transcode_decision.closest('label').addClass('active');
+            });
+
+            loadHistoryTable(media_type, transcode_decision);
+        }
+    });
+
+    $("#refresh-history-list").click(function () {
+        history_table.draw();
+    });
+
+    function loadPlaylistsTable() {
+        // Build playlists table
+        playlists_table_options.ajax = {
+            url: 'get_playlists_list',
+            type: 'POST',
+            data: function ( d ) {
+                return {
+                    json_data: JSON.stringify( d ),
+                    user_id: user_id
+                };
+            },
+            error: function(xhr, error, thrown) {
+                showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
+            }
         };
-        sync_table = $('#sync_table-UID-${data["user_id"]}').DataTable(sync_table_options);
-        sync_table.column(2).visible(false);
+        playlists_table = $('#playlists_table-SID-${data["user_id"]}').DataTable(playlists_table_options);
 
-        var colvis_sync = new $.fn.dataTable.ColVis( sync_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', exclude: [0] } );
-        $( colvis_sync.button() ).appendTo('#button-bar-sync');
+        var colvis = new $.fn.dataTable.ColVis(playlists_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', sAlign: 'right' });
+        $('#button-bar-playlists').empty().append(colvis.button());
 
-        clearSearchButton('sync_table-UID-${data["user_id"]}', sync_table);
+        clearSearchButton('playlists_table-SID-${data["user_id"]}', playlists_table);
     }
+
+    $('#nav-tabs-playlists').on('shown.bs.tab', function() {
+        if (typeof(playlists_table) === 'undefined') {
+            loadPlaylistsTable();
+        }
+    });
+
+    $("#refresh-playlists-table").click(function () {
+        playlists_table.draw();
+    });
 
     function loadIPAddressTable() {
         // Build user IP table
@@ -474,14 +604,31 @@ DOCUMENTATION :: END
             data: function ( d ) {
                 return {
                     json_data: JSON.stringify( d ),
-                    user_id: user_id
+                    user_id: user_id,
+                    include_archived: include_archived
                 };
+            },
+            error: function(xhr, error, thrown) {
+                showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
             }
         };
         user_ip_table = $('#user_ip_table-UID-${data["user_id"]}').DataTable(user_ip_table_options);
 
+        var colvis_user_ip = new $.fn.dataTable.ColVis( user_ip_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', sAlign: 'right' } );
+        $('#button-bar-ip-address').empty().append(colvis_user_ip.button());
+
         clearSearchButton('user_ip_table-UID-${data["user_id"]}', user_ip_table);
     }
+
+    $('#nav-tabs-ipaddresses').on('shown.bs.tab', function() {
+        if (typeof(user_ip_table) === 'undefined') {
+            loadIPAddressTable(user_id);
+        }
+    });
+
+    $("#refresh-ip-address-list").click(function () {
+        user_ip_table.draw();
+    });
 
     function loadLoginTable() {
         // Build user login table
@@ -493,63 +640,121 @@ DOCUMENTATION :: END
                     json_data: JSON.stringify(d),
                     user_id: user_id
                 };
+            },
+            error: function(xhr, error, thrown) {
+                showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
             }
         };
         login_log_table = $('#login_log_table-UID-${data["user_id"]}').DataTable(login_log_table_options);
         login_log_table.columns([1, 2]).visible(false);
 
-        var colvis_login = new $.fn.dataTable.ColVis( login_log_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', exclude: [7] } );
-        $( colvis_login.button() ).appendTo('#button-bar-login');
+        var colvis_login = new $.fn.dataTable.ColVis( login_log_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', exclude: [7], sAlign: 'right' } );
+        $('#button-bar-login').empty().append(colvis_login.button());
 
         clearSearchButton('login_log_table-UID-${data["user_id"]}', login_log_table);
     }
 
-    $('a[href="#tabs-history"]').on('shown.bs.tab', function() {
-        if (typeof(history_table) === 'undefined') {
-            var media_type = getLocalStorage('user_' + user_id + '-history_media_type', 'all');
-            $('#history-' + media_type).prop('checked', true);
-            $('#history-' + media_type).closest('label').addClass('active');
-            loadHistoryTable(media_type);
-        }
-    });
-
-    $('a[href="#tabs-synceditems"]').on('shown.bs.tab', function() {
-        if (typeof(sync_table) === 'undefined') {
-            loadSyncTable(user_id);
-        }
-    });
-
-    $('a[href="#tabs-ipaddresses"]').on('shown.bs.tab', function() {
-        if (typeof(user_ip_table) === 'undefined') {
-            loadIPAddressTable(user_id);
-        }
-    });
-
-    $('a[href="#tabs-tautullilogins"]').on('shown.bs.tab', function() {
+    $('#nav-tabs-tautullilogins').on('shown.bs.tab', function() {
         if (typeof(login_log_table) === 'undefined') {
             loadLoginTable(user_id);
         }
-    });
-
-    $("#refresh-history-list").click(function () {
-        history_table.draw();
-    });
-
-    $("#refresh-syncs-list").click(function() {
-        sync_table.ajax.reload();
-    });
-
-    $("#refresh-ip-address-list").click(function () {
-        user_ip_table.draw();
     });
 
     $("#refresh-login-list").click(function () {
         login_log_table.draw();
     });
 
-    $(".inactive-user-tooltip").tooltip();
+    function recentlyWatched() {
+        // Populate recently watched
+        $.ajax({
+            url: 'get_user_recently_watched',
+            async: true,
+            data: {
+                user_id: user_id,
+                limit: 50,
+                include_archived: include_archived
+            },
+            complete: function(xhr, status) {
+                $("#user-recently-watched").html(xhr.responseText);
+                highlightScrollerButton("#recently-watched");
+                paginateScroller("#recently-watched", ".paginate-watched");
+            }
+        });
+    }
 
-    % if _session['user_group'] == 'admin':
+    recentlyWatched();
+
+    $(document).ready(function () {
+        // Javascript to enable link to tab
+        var hash = document.location.hash;
+        var prefix = "tab_";
+        if (hash) {
+            $('.nav-list #nav-' + hash.replace('#' + prefix, "")).tab('show').trigger('show.bs.tab');
+        }
+
+        // Change hash for page-reload
+        $('.nav-list a').on('shown.bs.tab', function (e) {
+            window.location.hash = e.target.hash.replace("#", "#" + prefix);
+        });
+
+        // Populate watch time stats
+        $.ajax({
+            url: 'user_watch_time_stats',
+            async: true,
+            data: { user_id: user_id, user: username, include_archived: include_archived },
+            complete: function(xhr, status) {
+                $("#user-time-stats").html(xhr.responseText);
+            }
+        });
+
+        // Populate platform stats
+        $.ajax({
+            url: 'user_player_stats',
+            async: true,
+            data: { user_id: user_id, user: username, include_archived: include_archived },
+            complete: function(xhr, status) {
+                $("#user-player-stats").html(xhr.responseText);
+            }
+        });
+
+    });
+</script>
+% if _session['user_group'] == 'admin':
+<script>
+    function loadExportTable() {
+        // Build export table
+        export_table_options.ajax = {
+            url: 'get_export_list',
+            type: 'POST',
+            data: function ( d ) {
+                return {
+                    json_data: JSON.stringify( d ),
+                    user_id: user_id
+                };
+            },
+            error: function(xhr, error, thrown) {
+                showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
+            }
+        };
+        export_table = $('#export_table-SID-${data["user_id"]}').DataTable(export_table_options);
+        export_table.columns([2, 7]).visible(false);
+
+        var colvis = new $.fn.dataTable.ColVis(export_table, { buttonText: '<i class="fa fa-columns"></i> Select columns', buttonClass: 'btn btn-dark', sAlign: 'right' });
+        $('#button-bar-export').empty().append(colvis.button());
+
+        clearSearchButton('export_table-SID-${data["user_id"]}', export_table);
+    }
+
+    $('#nav-tabs-export').on('shown.bs.tab', function() {
+        if (typeof(export_table) === 'undefined') {
+            loadExportTable();
+        }
+    });
+
+    $("#refresh-export-table").click(function () {
+        export_table.draw();
+    });
+
     $("#edit-user-tooltip").tooltip();
 
     // Load edit user modal
@@ -566,10 +771,27 @@ DOCUMENTATION :: END
         });
     });
 
-    $('#row-edit-mode').on('click', function() {
-        $('#row-edit-mode-alert').fadeIn(200);
+    $(".export-button").click(function() {
+        $.ajax({
+            url: 'export_metadata_modal',
+            data: {
+                user_id: $(this).data('user_id'),
+                media_type: $(this).data('media_type'),
+                sub_media_type: $(this).data('sub_media_type'),
+                export_type: $(this).data('export_type')
+            },
+            cache: false,
+            async: true,
+            complete: function(xhr, status) {
+                $("#export-modal").html(xhr.responseText);
+            }
+        });
+    });
 
+    $('#row-edit-mode').on('click', function() {
         if ($(this).hasClass('active')) {
+            $(this).tooltip('destroy');
+
             if (history_to_delete.length > 0) {
                 $('#deleteCount').text(history_to_delete.length);
                 $('#deleteType').text('history');
@@ -595,6 +817,13 @@ DOCUMENTATION :: END
             });
 
         } else {
+            $(this).tooltip({
+                container: '.body-container',
+                placement: 'bottom',
+                title: 'Select rows to delete. Data is deleted upon exiting delete mode.',
+                trigger: 'manual'
+            }).tooltip('show');
+
             history_to_delete = [];
             $('.history_table .delete-control').each(function() {
                 $(this).find('button.btn-danger').toggleClass('btn-warning').toggleClass('btn-danger');
@@ -602,142 +831,7 @@ DOCUMENTATION :: END
             });
         }
     });
-
-    $('#sync-row-edit-mode').on('click', function() {
-        $('#sync-row-edit-mode-alert').fadeIn(200);
-
-        if ($(this).hasClass('active')) {
-            if (syncs_to_delete.length > 0) {
-                $('#deleteCount').text(syncs_to_delete.length);
-                $('#deleteType').text('sync');
-                $('#confirm-modal-delete').modal();
-                $('#confirm-modal-delete').one('click', '#confirm-delete', function () {
-                    syncs_to_delete.forEach(function(row, idx) {
-                        $.ajax({
-                            url: 'delete_sync_rows',
-                            type: 'POST',
-                            data: {
-                                client_id: row.client_id,
-                                sync_id: row.sync_id
-                            },
-                            async: true,
-                            success: function (data) {
-                                var msg = "Sync deleted";
-                                showMsg(msg, false, true, 2000);
-                            }
-                        });
-                    });
-                    sync_table.ajax.reload();
-                });
-            }
-
-            $('.sync_table .delete-control').each(function () {
-                $(this).addClass('hidden');
-                $('#sync-row-edit-mode-alert').fadeOut(200);
-            });
-
-        } else {
-            syncs_to_delete = [];
-            $('.sync_table .delete-control').each(function() {
-                $(this).find('button.btn-danger').toggleClass('btn-warning').toggleClass('btn-danger');
-                $(this).removeClass('hidden');
-            });
-        }
-    });
-    % endif
-
-    function recentlyWatched() {
-        // Populate recently watched
-        $.ajax({
-            url: 'get_user_recently_watched',
-            async: true,
-            data: {
-                user_id: user_id,
-                limit: 50
-            },
-            complete: function(xhr, status) {
-                $("#user-recently-watched").html(xhr.responseText);
-                highlightWatchedScrollerButton();
-            }
-        });
-    }
-
-    recentlyWatched();
-
-    function highlightWatchedScrollerButton() {
-        var scroller = $("#recently-watched-row-scroller");
-        var numElems = scroller.find("li").length;
-        scroller.width(numElems * 175);
-        if (scroller.width() > $("#user-recently-watched").width()) {
-            $("#recently-watched-page-right").removeClass("disabled");
-        } else {
-            $("#recently-watched-page-right").addClass("disabled");
-        }
-    }
-
-    $(window).resize(function() {
-        highlightWatchedScrollerButton();
-    });
-
-    var leftTotal = 0;
-    $(".paginate").click(function (e) {
-        e.preventDefault();
-        var scroller = $("#recently-watched-row-scroller");
-        var containerWidth = $("#user-recently-watched").width();
-        var scrollAmount = $(this).data("id") * parseInt(containerWidth / 175) * 175;
-        var leftMax = Math.min(-parseInt(scroller.width()) + Math.abs(scrollAmount), 0);
-
-        leftTotal = Math.max(Math.min(leftTotal + scrollAmount, 0), leftMax);
-        scroller.animate({ left: leftTotal }, 250);
-
-        if (leftTotal == 0) {
-            $("#recently-watched-page-left").addClass("disabled").blur();
-        } else {
-            $("#recently-watched-page-left").removeClass("disabled");
-        }
-
-        if (leftTotal == leftMax) {
-            $("#recently-watched-page-right").addClass("disabled").blur();
-        } else {
-            $("#recently-watched-page-right").removeClass("disabled");
-        }
-    });
-
-    $(document).ready(function () {
-
-        // Javascript to enable link to tab
-        var hash = document.location.hash;
-        var prefix = "tab_";
-        if (hash) {
-            $('.user-info-nav a[href='+hash.replace(prefix,"")+']').tab('show').trigger('show.bs.tab');
-        }
-
-        // Change hash for page-reload
-        $('.user-info-nav a').on('shown.bs.tab', function (e) {
-            window.location.hash = e.target.hash.replace("#", "#" + prefix);
-        });
-
-        // Populate watch time stats
-        $.ajax({
-            url: 'user_watch_time_stats',
-            async: true,
-            data: { user_id: user_id, user: username },
-            complete: function(xhr, status) {
-                $("#user-time-stats").html(xhr.responseText);
-            }
-        });
-
-        // Populate platform stats
-        $.ajax({
-            url: 'user_player_stats',
-            async: true,
-            data: { user_id: user_id, user: username },
-            complete: function(xhr, status) {
-                $("#user-player-stats").html(xhr.responseText);
-            }
-        });
-
-    });
 </script>
+% endif
 % endif
 </%def>

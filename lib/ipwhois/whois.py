@@ -1,4 +1,4 @@
-# Copyright (c) 2013-2019 Philip Hane
+# Copyright (c) 2013-2024 Philip Hane
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -67,7 +67,7 @@ RIR_WHOIS = {
             'name': r'(NetName):[^\S\n]+(?P<val>.+?)\n',
             'handle': r'(NetHandle):[^\S\n]+(?P<val>.+?)\n',
             'description': r'(OrgName|CustName):[^\S\n]+(?P<val>.+?)'
-                    '(?=(\n\S):?)',
+                    '(?=(\n\\S):?)',
             'country': r'(Country):[^\S\n]+(?P<val>.+?)\n',
             'state': r'(StateProv):[^\S\n]+(?P<val>.+?)\n',
             'city': r'(City):[^\S\n]+(?P<val>.+?)\n',
@@ -75,7 +75,7 @@ RIR_WHOIS = {
             'postal_code': r'(PostalCode):[^\S\n]+(?P<val>.+?)\n',
             'emails': (
                 r'.+?:.*?[^\S\n]+(?P<val>[\w\-\.]+?@[\w\-\.]+\.[\w\-]+)('
-                '[^\S\n]+.*?)*?\n'
+                '[^\\S\n]+.*?)*?\n'
             ),
             'created': r'(RegDate):[^\S\n]+(?P<val>.+?)\n',
             'updated': r'(Updated):[^\S\n]+(?P<val>.+?)\n',
@@ -92,7 +92,7 @@ RIR_WHOIS = {
             'address': r'(address):[^\S\n]+(?P<val>.+?)(?=(\n\S):?)',
             'emails': (
                 r'.+?:.*?[^\S\n]+(?P<val>[\w\-\.]+?@[\w\-\.]+\.[\w\-]+)('
-                '[^\S\n]+.*?)*?\n'
+                '[^\\S\n]+.*?)*?\n'
             ),
             'created': (
                 r'(created):[^\S\n]+(?P<val>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]'
@@ -115,7 +115,7 @@ RIR_WHOIS = {
             'address': r'(address):[^\S\n]+(?P<val>.+?)(?=(\n\S):?)',
             'emails': (
                 r'.+?:.*?[^\S\n]+(?P<val>[\w\-\.]+?@[\w\-\.]+\.[\w\-]+)('
-                '[^\S\n]+.*?)*?\n'
+                '[^\\S\n]+.*?)*?\n'
             ),
             'updated': r'(changed):[^\S\n]+.*(?P<val>[0-9]{8}).*?\n'
         },
@@ -129,7 +129,7 @@ RIR_WHOIS = {
             'country': r'(country):[^\S\n]+(?P<val>.+?)\n',
             'emails': (
                 r'.+?:.*?[^\S\n]+(?P<val>[\w\-\.]+?@[\w\-\.]+\.[\w\-]+)('
-                '[^\S\n]+.*?)*?\n'
+                '[^\\S\n]+.*?)*?\n'
             ),
             'created': r'(created):[^\S\n]+(?P<val>[0-9]{8}).*?\n',
             'updated': r'(changed):[^\S\n]+(?P<val>[0-9]{8}).*?\n'
@@ -146,7 +146,7 @@ RIR_WHOIS = {
             'address': r'(address):[^\S\n]+(?P<val>.+?)(?=(\n\S):?)',
             'emails': (
                 r'.+?:.*?[^\S\n]+(?P<val>[\w\-\.]+?@[\w\-\.]+\.[\w\-]+)('
-                '[^\S\n]+.*?)*?\n'
+                '[^\\S\n]+.*?)*?\n'
             ),
         }
     }
@@ -166,7 +166,7 @@ RWHOIS = {
         'postal_code': r'(network:Postal-Code):(?P<val>.+?)\n',
         'emails': (
             r'.+?:.*?[^\S\n]+(?P<val>[\w\-\.]+?@[\w\-\.]+\.[\w\-]+)('
-            '[^\S\n]+.*?)*?\n'
+            '[^\\S\n]+.*?)*?\n'
         ),
         'created': r'(network:Created):(?P<val>.+?)\n',
         'updated': r'(network:Updated):(?P<val>.+?)\n'
@@ -324,16 +324,6 @@ class Whois:
 
         return ret
 
-    def _parse_fields(self, *args, **kwargs):
-        """
-        Deprecated. This will be removed in a future release.
-        """
-
-        from warnings import warn
-        warn('Whois._parse_fields() has been deprecated and will be '
-             'removed. You should now use Whois.parse_fields().')
-        return self.parse_fields(*args, **kwargs)
-
     def get_nets_arin(self, response):
         """
         The function for parsing network blocks from ARIN whois data.
@@ -415,16 +405,6 @@ class Whois:
 
         return nets
 
-    def _get_nets_arin(self, *args, **kwargs):
-        """
-        Deprecated. This will be removed in a future release.
-        """
-
-        from warnings import warn
-        warn('Whois._get_nets_arin() has been deprecated and will be '
-             'removed. You should now use Whois.get_nets_arin().')
-        return self.get_nets_arin(*args, **kwargs)
-
     def get_nets_lacnic(self, response):
         """
         The function for parsing network blocks from LACNIC whois data.
@@ -494,16 +474,6 @@ class Whois:
                 pass
 
         return nets
-
-    def _get_nets_lacnic(self, *args, **kwargs):
-        """
-        Deprecated. This will be removed in a future release.
-        """
-
-        from warnings import warn
-        warn('Whois._get_nets_lacnic() has been deprecated and will be '
-             'removed. You should now use Whois.get_nets_lacnic().')
-        return self.get_nets_lacnic(*args, **kwargs)
 
     def get_nets_other(self, response):
         """
@@ -577,20 +547,10 @@ class Whois:
 
         return nets
 
-    def _get_nets_other(self, *args, **kwargs):
-        """
-        Deprecated. This will be removed in a future release.
-        """
-
-        from warnings import warn
-        warn('Whois._get_nets_other() has been deprecated and will be '
-             'removed. You should now use Whois.get_nets_other().')
-        return self.get_nets_other(*args, **kwargs)
-
     def lookup(self, inc_raw=False, retry_count=3, response=None,
                get_referral=False, extra_blacklist=None,
                ignore_referral_errors=False, asn_data=None,
-               field_list=None, is_offline=False):
+               field_list=None, is_offline=False, get_recursive=True):
         """
         The function for retrieving and parsing whois information for an IP
         address via port 43/tcp (WHOIS).
@@ -675,7 +635,7 @@ class Whois:
             # Retrieve the whois data.
             response = self._net.get_whois(
                 asn_registry=asn_data['asn_registry'], retry_count=retry_count,
-                extra_blacklist=extra_blacklist
+                extra_blacklist=extra_blacklist, get_recursive=get_recursive
             )
 
             if get_referral:

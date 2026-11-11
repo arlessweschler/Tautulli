@@ -1,5 +1,5 @@
 # mako/ast.py
-# Copyright 2006-2020 the Mako authors and contributors <see AUTHORS file>
+# Copyright 2006-2026 the Mako authors and contributors <see AUTHORS file>
 #
 # This module is part of Mako and is released under
 # the MIT License: http://www.opensource.org/licenses/mit-license.php
@@ -9,16 +9,14 @@ code, as well as generating Python from AST nodes"""
 
 import re
 
-from mako import compat
 from mako import exceptions
 from mako import pyparser
 
 
-class PythonCode(object):
-
+class PythonCode:
     """represents information about a string containing Python code"""
 
-    def __init__(self, code, **exception_kwargs):
+    def __init__(self, code, lineno_offset=0, **exception_kwargs):
         self.code = code
 
         # represents all identifiers which are assigned to at some point in
@@ -39,8 +37,20 @@ class PythonCode(object):
         # - AST is less likely to break with version changes
         # (for example, the behavior of co_names changed a little bit
         # in python version 2.5)
-        if isinstance(code, compat.string_types):
-            expr = pyparser.parse(code.lstrip(), "exec", **exception_kwargs)
+        if isinstance(code, str):
+            stripped = code.lstrip()
+
+            # the code of a <% %> block usually begins on the line after the
+            # tag; count the lines that are stripped off so that a syntax
+            # error is reported against the line it is on
+            lineno_offset += code[: len(code) - len(stripped)].count("\n")
+
+            expr = pyparser.parse(
+                stripped,
+                "exec",
+                lineno_offset=lineno_offset,
+                **exception_kwargs,
+            )
         else:
             expr = code
 
@@ -48,8 +58,7 @@ class PythonCode(object):
         f.visit(expr)
 
 
-class ArgumentList(object):
-
+class ArgumentList:
     """parses a fragment of code as a comma-separated list of expressions"""
 
     def __init__(self, code, **exception_kwargs):
@@ -57,7 +66,7 @@ class ArgumentList(object):
         self.args = []
         self.declared_identifiers = set()
         self.undeclared_identifiers = set()
-        if isinstance(code, compat.string_types):
+        if isinstance(code, str):
             if re.match(r"\S", code) and not re.match(r",\s*$", code):
                 # if theres text and no trailing comma, insure its parsed
                 # as a tuple by adding a trailing comma
@@ -71,7 +80,6 @@ class ArgumentList(object):
 
 
 class PythonFragment(PythonCode):
-
     """extends PythonCode to provide identifier lookups in partial control
     statements
 
@@ -88,31 +96,38 @@ class PythonFragment(PythonCode):
         if not m:
             raise exceptions.CompileException(
                 "Fragment '%s' is not a partial control statement" % code,
-                **exception_kwargs
+                **exception_kwargs,
             )
         if m.group(3):
             code = code[: m.start(3)]
-        (keyword, expr) = m.group(1, 2)
+        keyword, expr = m.group(1, 2)
+
+        # a statement that is only valid as a continuation is completed by
+        # a line placed before it; the line the fragment is on is that many
+        # lines further along than the code which is parsed
+        lineno_offset = 0
+
         if keyword in ["for", "if", "while"]:
             code = code + "pass"
         elif keyword == "try":
             code = code + "pass\nexcept:pass"
-        elif keyword == "elif" or keyword == "else":
+        elif keyword in ["elif", "else"]:
             code = "if False:pass\n" + code + "pass"
+            lineno_offset = -1
         elif keyword == "except":
             code = "try:pass\n" + code + "pass"
+            lineno_offset = -1
         elif keyword == "with":
             code = code + "pass"
         else:
             raise exceptions.CompileException(
                 "Unsupported control keyword: '%s'" % keyword,
-                **exception_kwargs
+                **exception_kwargs,
             )
-        super(PythonFragment, self).__init__(code, **exception_kwargs)
+        super().__init__(code, lineno_offset=lineno_offset, **exception_kwargs)
 
 
-class FunctionDecl(object):
-
+class FunctionDecl:
     """function declaration"""
 
     def __init__(self, code, allow_kwargs=True, **exception_kwargs):
@@ -124,13 +139,13 @@ class FunctionDecl(object):
         if not hasattr(self, "funcname"):
             raise exceptions.CompileException(
                 "Code '%s' is not a function declaration" % code,
-                **exception_kwargs
+                **exception_kwargs,
             )
         if not allow_kwargs and self.kwargs:
             raise exceptions.CompileException(
                 "'**%s' keyword argument not allowed here"
                 % self.kwargnames[-1],
-                **exception_kwargs
+                **exception_kwargs,
             )
 
     def get_argument_expressions(self, as_call=False):
@@ -196,10 +211,7 @@ class FunctionDecl(object):
 
 
 class FunctionArgs(FunctionDecl):
-
     """the argument portion of a function declaration"""
 
     def __init__(self, code, **kwargs):
-        super(FunctionArgs, self).__init__(
-            "def ANON(%s):pass" % code, **kwargs
-        )
+        super().__init__("def ANON(%s):pass" % code, **kwargs)

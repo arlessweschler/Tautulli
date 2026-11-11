@@ -25,6 +25,10 @@ media_info_table_options = {
     },
     "pagingType": "full_numbers",
     "stateSave": true,
+    "stateSaveParams": function (settings, data) {
+        data.search.search = "";
+        data.start = 0;
+    },
     "stateDuration": 0,
     "processing": false,
     "serverSide": true,
@@ -45,21 +49,21 @@ media_info_table_options = {
                     }
                     if (rowData['media_type'] === 'show') {
                         expand_details = '<span class="expand-media-info-tooltip" data-toggle="tooltip" title="Show Seasons"><i class="fa fa-plus-circle fa-fw"></i></span>';
-                        $(td).html('<div><a href="#"><div style="float: left;">' + expand_details + '&nbsp;' + date + '</div></a></div>');
+                        $(td).html('<a href="#">' + expand_details + '&nbsp;' + date + '</a>');
                     } else if (rowData['media_type'] === 'season') {
                         expand_details = '<span class="expand-media-info-tooltip" data-toggle="tooltip" title="Show Episodes"><i class="fa fa-plus-circle fa-fw"></i></span>';
-                        $(td).html('<div><a href="#"><div style="float: left;">' + expand_details + '&nbsp;' + date + '</div></a></div>');
+                        $(td).html('<a href="#">' + expand_details + '&nbsp;' + date + '</a>');
                     } else if (rowData['media_type'] === 'artist') {
                         expand_details = '<span class="expand-media-info-tooltip" data-toggle="tooltip" title="Show Albums"><i class="fa fa-plus-circle fa-fw"></i></span>';
-                        $(td).html('<div><a href="#"><div style="float: left;">' + expand_details + '&nbsp;' + date + '</div></a></div>');
+                        $(td).html('<a href="#">' + expand_details + '&nbsp;' + date + '</a>');
                     } else if (rowData['media_type'] === 'album') {
                         expand_details = '<span class="expand-media-info-tooltip" data-toggle="tooltip" title="Show Tracks"><i class="fa fa-plus-circle fa-fw"></i></span>';
-                        $(td).html('<div><a href="#"><div style="float: left;">' + expand_details + '&nbsp;' + date + '</div></a></div>');
+                        $(td).html('<a href="#">' + expand_details + '&nbsp;' + date + '</a>');
                     } else if (rowData['media_type'] === 'photo_album') {
                         expand_details = '<span class="expand-media-info-tooltip" data-toggle="tooltip" title="Show Photos"><i class="fa fa-plus-circle fa-fw"></i></span>';
-                        $(td).html('<div><a href="#"><div style="float: left;">' + expand_details + '&nbsp;' + date + '</div></a></div>');
+                        $(td).html('<a href="#">' + expand_details + '&nbsp;' + date + '</a>');
                     } else {
-                        $(td).html('<div style="float: left;"><i class="fa fa-plus-circle fa-fw fa-blank"></i>&nbsp;' + date + '</div>');
+                        $(td).html('<i class="fa fa-plus-circle fa-fw fa-blank"></i>&nbsp;' + date);
                     }
                 }
             },
@@ -79,43 +83,43 @@ media_info_table_options = {
                         if (rowData['year']) { parent_info = ' (' + rowData['year'] + ')'; }
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Movie"><i class="fa fa-film fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, 'poster') + '" data-height="120" data-width="80">' + rowData['title'] + parent_info + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'show') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="TV Show"><i class="fa fa-television fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, 'poster') + '" data-height="120" data-width="80">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'season') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Season"><i class="fa fa-television fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, 'poster') + '" data-height="120" data-width="80">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left; padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
                     } else if (rowData['media_type'] === 'episode') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Episode"><i class="fa fa-television fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 500, 280, null, null, null, 'art') + '" data-height="80" data-width="140">E' + rowData['media_index'] + ' - ' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left; padding-left: 30px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="padding-left: 30px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
                     } else if (rowData['media_type'] === 'artist') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Artist"><i class="fa fa-music fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 300, null, null, null, 'cover') + '" data-height="80" data-width="80">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'album') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Album"><i class="fa fa-music fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 300, null, null, null, 'cover') + '" data-height="80" data-width="80">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left; padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
                     } else if (rowData['media_type'] === 'track') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Track"><i class="fa fa-music fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 300, null, null, null, 'cover') + '" data-height="80" data-width="80">T' + rowData['media_index'] + ' - ' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="float: left; padding-left: 30px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="padding-left: 30px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
                     } else if (rowData['media_type'] === 'photo_album') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Photo Album"><i class="fa fa-camera fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, 'poster') + '" data-height="120" data-width="80">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><div style="float: left; padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '">' + media_type + '&nbsp;' + thumb_popover + '</a></div>');
                     } else if (rowData['media_type'] === 'photo') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Photo"><i class="fa fa-picture-o fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 300, 450, null, null, null, 'poster') + '" data-height="120" data-width="80">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><div style="float: left; padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
                     } else if (rowData['media_type'] === 'clip') {
                         media_type = '<span class="media-type-tooltip" data-toggle="tooltip" title="Video"><i class="fa fa-video-camera fa-fw"></i></span>';
                         thumb_popover = '<span class="thumb-tooltip" data-toggle="popover" data-img="' + page('pms_image_proxy', rowData['thumb'], rowData['rating_key'], 500, 280, null, null, null, 'art') + '" data-height="80" data-width="140">' + rowData['title'] + '</span>';
-                        $(td).html('<div class="history-title"><div style="float: left; padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></div>');
+                        $(td).html('<div class="history-title"><a href="' + page('info', rowData['rating_key']) + '"><div style="padding-left: 15px;">' + media_type + '&nbsp;' + thumb_popover + '</div></a></div>');
                     } else {
                         $(td).html(cellData);
                     }
@@ -257,6 +261,7 @@ media_info_table_options = {
         $('body').popover({
             selector: '[data-toggle="popover"]',
             html: true,
+            sanitize: false,
             container: 'body',
             trigger: 'hover',
             placement: 'right',
@@ -281,6 +286,7 @@ media_info_table_options = {
             $('#refresh-media-info-table').prop('disabled', true);
             $.ajax({
                 url: 'get_media_info_file_sizes',
+                type: 'post',
                 async: true,
                 data: { section_id: section_id },
                 complete: function (xhr, status) {
@@ -359,7 +365,7 @@ function childTableOptionsMedia(rowData) {
     media_info_table_options.lengthChange = false;
     media_info_table_options.info = false;
     media_info_table_options.pageLength = 10;
-    media_info_table_options.bStateSave = false;
+    media_info_table_options.stateSave = false;
     media_info_table_options.ajax = {
         url: 'get_library_media_info',
         type: 'post',
@@ -369,11 +375,15 @@ function childTableOptionsMedia(rowData) {
                 section_id: rowData['section_id'],
                 section_type: section_type,
                 rating_key: rowData['rating_key'],
-                refresh: refresh_child_tables
+                refresh: refresh_child_tables,
+                include_archived: include_archived
             };
+        },
+        error: function(xhr, error, thrown) {
+            showMsg('<i class="fa fa-exclamation-triangle"></i> An error occurred while loading table.<br>Please check the logs.', false, false, null, true);
         }
     }
-    media_info_table_options.fnDrawCallback = function (settings) {
+    media_info_table_options.drawCallback = function (settings) {
         $('#ajaxMsg').fadeOut();
 
         // Create the tooltips.
@@ -381,6 +391,7 @@ function childTableOptionsMedia(rowData) {
         $('.media-type-tooltip').tooltip();
         $('.thumb-tooltip').popover({
             html: true,
+            sanitize: false,
             container: 'body',
             trigger: 'hover',
             placement: 'right',
@@ -406,6 +417,7 @@ function childTableOptionsMedia(rowData) {
             $('#refresh-media-info-table').prop('disabled', true);
             $.ajax({
                 url: 'get_media_info_file_sizes',
+                type: 'post',
                 async: true,
                 data: {
                     section_id: section_id,
@@ -424,7 +436,7 @@ function childTableOptionsMedia(rowData) {
 
         $(this).closest('div.slider').slideDown();
     }
-    media_info_table_options.fnRowCallback = function (row, rowData, rowIndex) {
+    media_info_table_options.rowCallback = function (row, rowData, rowIndex) {
         if (rowData['rating_key'] in media_info_child_table) {
             // if a child table was already created
             $(row).addClass('shown')

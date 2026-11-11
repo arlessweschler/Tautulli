@@ -17,7 +17,8 @@
 
 import os
 import sys
-from systray import SysTrayIcon
+
+from infi.systray import SysTrayIcon
 
 try:
     from shlex import quote as cmd_quote
@@ -30,26 +31,22 @@ except ImportError:
     import _winreg as winreg
 
 import plexpy
-if plexpy.PYTHON2:
-    import common
-    import logger
-    import versioncheck
-else:
-    from plexpy import common
-    from plexpy import logger
-    from plexpy import versioncheck
+from plexpy import common
+from plexpy import logger
+from plexpy import versioncheck
 
 
 class WindowsSystemTray(object):
     def __init__(self):
         self.image_dir = os.path.join(plexpy.PROG_DIR, 'data/interfaces/', plexpy.CONFIG.INTERFACE, 'images')
+        self.icon = os.path.join(self.image_dir, 'logo-circle.ico')
 
         if plexpy.UPDATE_AVAILABLE:
-            self.icon = os.path.join(self.image_dir, 'logo-circle-update.ico')
             self.hover_text = common.PRODUCT + ' - Update Available!'
+            self.update_title = 'Check for Updates - Update Available!'
         else:
-            self.icon = os.path.join(self.image_dir, 'logo-circle.ico')
             self.hover_text = common.PRODUCT
+            self.update_title = 'Check for Updates'
 
         if plexpy.CONFIG.LAUNCH_STARTUP:
             launch_start_icon = os.path.join(self.image_dir, 'check-solid.ico')
@@ -66,7 +63,7 @@ class WindowsSystemTray(object):
             ['Start Tautulli at Login', launch_start_icon, self.tray_startup, None],
             ['Open Browser when Tautulli Starts', launch_browser_icon, self.tray_browser, None],
             ['', None, 'separator', None],
-            ['Check for Updates', None, self.tray_check_update, None],
+            [self.update_title, None, self.tray_check_update, None],
             ['Restart', None, self.tray_restart, None]
         ]
         if not plexpy.FROZEN:
@@ -79,7 +76,7 @@ class WindowsSystemTray(object):
         try:
             self.tray_icon.start()
         except Exception as e:
-            logger.error("Unable to launch system tray icon: %s." % e)
+            logger.exception("Unable to launch system tray icon: %s." % e)
 
     def shutdown(self):
         self.tray_icon.shutdown()
@@ -105,8 +102,10 @@ class WindowsSystemTray(object):
         if plexpy.UPDATE_AVAILABLE:
             plexpy.SIGNAL = 'update'
         else:
-            hover_text = common.PRODUCT + ' - No Update Available'
-            self.update(hover_text=hover_text)
+            self.hover_text = common.PRODUCT + ' - No Update Available'
+            self.update_title = 'Check for Updates - No Update Available'
+            self.menu[5][0] = self.update_title
+            self.update(hover_text=self.hover_text, menu_options=self.menu)
 
     def tray_restart(self, tray_icon):
         plexpy.SIGNAL = 'restart'
@@ -116,12 +115,13 @@ class WindowsSystemTray(object):
 
     def change_tray_update_icon(self):
         if plexpy.UPDATE_AVAILABLE:
-            self.icon = os.path.join(self.image_dir, 'logo-circle-update.ico')
             self.hover_text = common.PRODUCT + ' - Update Available!'
+            self.update_title = 'Check for Updates - Update Available!'
         else:
-            self.icon = os.path.join(self.image_dir, 'logo-circle.ico')
             self.hover_text = common.PRODUCT + ' - No Update Available'
-        self.update(icon=self.icon, hover_text=self.hover_text)
+            self.update_title = 'Check for Updates'
+        self.menu[5][0] = self.update_title
+        self.update(hover_text=self.hover_text, menu_options=self.menu)
 
     def change_tray_icons(self):
         if plexpy.CONFIG.LAUNCH_STARTUP:
@@ -144,18 +144,37 @@ def set_startup():
     startup_reg_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 
     exe = sys.executable
+    args = plexpy.ARGS or []
+    run_args = [arg for arg in args if arg != '--nolaunch']
     if plexpy.FROZEN:
-        args = [exe]
+        args = [exe] + run_args
     else:
-        args = [exe, plexpy.FULL_PATH]
+        args = [exe, plexpy.FULL_PATH] + run_args
+
+    registry_key_name = common.PRODUCT
 
     cmd = ' '.join(cmd_quote(arg) for arg in args).replace('python.exe', 'pythonw.exe').replace("'", '"')
 
     if plexpy.CONFIG.LAUNCH_STARTUP:
+        # Rename old Tautulli registry key
+        try:
+            registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, startup_reg_path, 0, winreg.KEY_ALL_ACCESS)
+            winreg.QueryValueEx(registry_key, '{}_{}'.format(common.PRODUCT, plexpy.CONFIG.PMS_UUID))
+            reg_value_exists = True
+        except WindowsError:
+            reg_value_exists = False
+
+        if reg_value_exists:
+            try:
+                winreg.DeleteValue(registry_key, '{}_{}'.format(common.PRODUCT, plexpy.CONFIG.PMS_UUID))
+                winreg.CloseKey(registry_key)
+            except WindowsError:
+                pass
+
         try:
             winreg.CreateKey(winreg.HKEY_CURRENT_USER, startup_reg_path)
             registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, startup_reg_path, 0, winreg.KEY_WRITE)
-            winreg.SetValueEx(registry_key, common.PRODUCT, 0, winreg.REG_SZ, cmd)
+            winreg.SetValueEx(registry_key, registry_key_name, 0, winreg.REG_SZ, cmd)
             winreg.CloseKey(registry_key)
             logger.info("Added Tautulli to Windows system startup registry key.")
             return True
@@ -167,14 +186,14 @@ def set_startup():
         # Check if registry value exists
         try:
             registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, startup_reg_path, 0, winreg.KEY_ALL_ACCESS)
-            winreg.QueryValueEx(registry_key, common.PRODUCT)
+            winreg.QueryValueEx(registry_key, registry_key_name)
             reg_value_exists = True
         except WindowsError:
             reg_value_exists = False
 
         if reg_value_exists:
             try:
-                winreg.DeleteValue(registry_key, common.PRODUCT)
+                winreg.DeleteValue(registry_key, registry_key_name)
                 winreg.CloseKey(registry_key)
                 logger.info("Removed Tautulli from Windows system startup registry key.")
                 return True

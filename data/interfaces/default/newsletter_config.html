@@ -2,18 +2,19 @@
 <%!
     import json
     from plexpy import notifiers
-    from plexpy.helpers import anon_url, checked
+    from plexpy.helpers import anon_url, checked, json_dumps_for_html
 
     all_notifiers = sorted(notifiers.get_notifiers(), key=lambda k: (k['agent_label'].lower(), k['friendly_name'], k['id']))
     email_notifiers = [n for n in all_notifiers if n['agent_name'] == 'email']
     email_notifiers = [{'id': 0, 'agent_label': 'New Email Configuration', 'friendly_name': ''}] + email_notifiers
     other_notifiers = [{'id': 0, 'agent_label': 'Select a Notification Agent', 'friendly_name': ''}] + all_notifiers
 %>
+
 <div class="modal-dialog" role="document">
     <div class="modal-content">
         <div class="modal-header">
             <button type="button" class="close" data-dismiss="modal" aria-hidden="true"><i class="fa fa-remove"></i></button>
-            <h4 class="modal-title" id="newsletter-config-modal-header">${newsletter['agent_label']} Newsletter Settings &nbsp;<small><span class="newsletter_id">(Newsletter ID: ${newsletter['id']})</span></small></h4>
+            <h4 class="modal-title" id="newsletter-config-modal-header">${newsletter['agent_label']} Newsletter Settings &nbsp;<small><span class="newsletter_id">(Newsletter ID: ${newsletter['id']}${' - ' + newsletter['friendly_name'] if newsletter['friendly_name'] else ''})</span></small></h4>
         </div>
         <div class="modal-body">
             <div class="container-fluid">
@@ -21,7 +22,7 @@
                     <ul class="nav nav-tabs list-unstyled" role="tablist">
                         <li role="presentation" class="active"><a href="#tabs-newsletter_config" aria-controls="tabs-newsletter_config" role="tab" data-toggle="tab">Configuration</a></li>
                         <li role="presentation"><a href="#tabs-newsletter_saving_sending" aria-controls="tabs-newsletter_saving_sending" role="tab" data-toggle="tab">Saving & Sending</a></li>
-                        <li role="presentation"><a href="#tabs-newsletter_text" aria-controls="tabs-newsletter_text" role="tab" data-toggle="tab">Newsletter Text</a></li>
+                        <li role="presentation"><a id="newsletter-text-tab" href="#tabs-newsletter_text" aria-controls="tabs-newsletter_text" role="tab" data-toggle="tab">Newsletter Text</a></li>
                         <li role="presentation"><a href="#tabs-test_newsletter" aria-controls="tabs-test_newsletter" role="tab" data-toggle="tab">Test Newsletter</a></li>
                     </ul>
                 </div>
@@ -32,7 +33,7 @@
                                 <div class="col-md-12">
                                     <div class="checkbox" style="margin-bottom: 20px;">
                                         <label>
-                                            <input type="checkbox" data-id="active_value" class="checkboxes" value="1" ${checked(newsletter['active'])}> Enable the Newsletter
+                                            <input type="checkbox" data-id="active_value" class="checkboxes" value="1" autocomplete="off" ${checked(newsletter['active'])}> Enable the Newsletter
                                         </label>
                                         <input type="hidden" id="active_value" name="active" value="${newsletter['active']}">
                                     </div>
@@ -40,34 +41,40 @@
                                         <label for="custom_cron">Schedule</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="custom_cron" name="newsletter_config_custom_cron">
+                                                <select class="form-control" id="custom_cron" name="newsletter_config_custom_cron" autocomplete="off">
                                                     <option value="0" ${'selected' if newsletter['config']['custom_cron'] == 0 else ''}>Simple</option>
                                                     <option value="1" ${'selected' if newsletter['config']['custom_cron'] == 1 else ''}>Custom</option>
                                                 </select>
-                                                <input type="text" id="cron_value" name="cron" value="${newsletter['cron']}" />
+                                                <input type="text" id="cron_value" name="cron" value="${newsletter['cron']}" autocomplete="off" />
                                                 <div id="cron-widget"></div>
                                             </div>
                                         </div>
                                         <p class="help-block">
                                             <span id="simple_cron_message">Set the schedule for the newsletter.</span>
-                                            <span id="custom_cron_message">Set the schedule for the newsletter using a <a href="${anon_url('https://crontab.guru')}" target="_blank">custom crontab</a>. Only standard cron values are valid.</span>
+                                            <span id="custom_cron_message">
+                                                Set the schedule for the newsletter using a <a href="${anon_url('https://crontab.guru')}" target="_blank" rel="noreferrer">custom crontab</a>.
+                                                <a href="${anon_url('https://apscheduler.readthedocs.io/en/3.x/modules/triggers/cron.html#expression-types')}" target="_blank" rel="noreferrer">Click here</a> for a list of supported expressions.
+                                            </span>
                                         </p>
                                     </div>
                                     <div class="form-group">
                                         <label for="time_frame">Time Frame</label>
                                         <div class="row">
-                                            <div class="col-md-4">
+                                            <div class="col-md-5">
                                                 <div class="input-group newsletter-time_frame">
                                                     <span class="input-group-addon form-control btn-dark inactive">Last</span>
-                                                    <input type="number" class="form-control" id="newsletter_config_time_frame" name="newsletter_config_time_frame" value="${newsletter['config']['time_frame']}">
-                                                    <select class="form-control" id="newsletter_config_time_frame_units" name="newsletter_config_time_frame_units">
-                                                        <option value="days" ${'selected' if newsletter['config']['time_frame_units'] == 'days' else ''}>days</option>
+                                                    <input type="number" class="form-control" id="newsletter_config_time_frame" name="newsletter_config_time_frame" value="${newsletter['config']['time_frame']}" autocomplete="off">
+                                                    <select class="form-control" id="newsletter_config_time_frame_units" name="newsletter_config_time_frame_units" autocomplete="off">
                                                         <option value="hours" ${'selected' if newsletter['config']['time_frame_units'] == 'hours' else ''}>hours</option>
+                                                        <option value="days" ${'selected' if newsletter['config']['time_frame_units'] == 'days' else ''}>days</option>
+                                                        <option value="weeks" ${'selected' if newsletter['config']['time_frame_units'] == 'weeks' else ''}>weeks</option>
+                                                        <option value="months" ${'selected' if newsletter['config']['time_frame_units'] == 'months' else ''}>months</option>
+                                                        <option value="years" ${'selected' if newsletter['config']['time_frame_units'] == 'years' else ''}>years</option>
                                                     </select>
                                                 </div>
                                             </div>
                                         </div>
-                                        <p class="help-block">Set the time frame to include in the newsletter. Note: Days uses calendar days (i.e. since midnight).</p>
+                                        <p class="help-block">Set the time frame to include in the newsletter.</p>
                                     </div>
                                 </div>
                                 <div class="col-md-12 modal-config-section">
@@ -84,7 +91,7 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" ${'readonly' if item.get('readonly') else ''}>
+                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off" ${'readonly' if item.get('readonly') else ''}>
                                             </div>
                                         </div>
                                         <p class="help-block">${item['description'] | n}</p>
@@ -94,7 +101,7 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-3">
-                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30">
+                                                <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">${item['description'] | n}</p>
@@ -112,7 +119,7 @@
                                     % elif item['input_type'] == 'checkbox':
                                     <div class="checkbox">
                                         <label>
-                                            <input type="checkbox" data-id="${item['name']}" class="checkboxes" value="1" ${checked(item['value'])}> ${item['label']}
+                                            <input type="checkbox" data-id="${item['name']}" class="checkboxes" value="1" autocomplete="off" ${checked(item['value'])}> ${item['label']}
                                         </label>
                                         <p class="help-block">${item['description'] | n}</p>
                                         <input type="hidden" id="${item['name']}" name="${item['name']}" value="${item['value']}">
@@ -122,7 +129,7 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="${item['name']}" name="${item['name']}">
+                                                <select class="form-control" id="${item['name']}" name="${item['name']}" autocomplete="off">
                                                     % for key, value in sorted(item['select_options'].items()):
                                                     % if key == item['value']:
                                                     <option value="${key}" selected>${value}</option>
@@ -140,9 +147,11 @@
                                         <label for="${item['name']}">${item['label']}</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="${item['name']}" name="${item['name']}">
+                                                <select class="form-control" id="${item['name']}" name="${item['name']}" autocomplete="off">
+                                                    % if item['select_all']:
                                                     <option value="select-all">Select All</option>
                                                     <option value="remove-all">Remove All</option>
+                                                    % endif
                                                     % if isinstance(item['select_options'], dict):
                                                     % for section, options in item['select_options'].items():
                                                     <optgroup label="${section}">
@@ -152,7 +161,9 @@
                                                     </optgroup>
                                                     % endfor
                                                     % else:
+                                                    % if item['select_all']:
                                                     <option value="border-all"></option>
+                                                    % endif
                                                     % for option in sorted(item['select_options'], key=lambda x: x['text'].lower()):
                                                         <option value="${option['value']}">${option['text']}</option>
                                                     % endfor
@@ -170,20 +181,20 @@
                                         <label for="id_name">Unique ID Name</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <input type="text" class="form-control" id="id_name" name="id_name" value="${newsletter['id_name']}" size="30">
+                                                <input type="text" class="form-control" id="id_name" name="id_name" value="${newsletter['id_name']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">
                                             Optional: Enter a unique ID name to create a static URL to the <em>last sent scheduled newsletter</em> at <span class="inline-pre">${http_root}newsletter/id/&lt;id_name&gt;</span>.
                                             Only letters (a-z), numbers (0-9), underscores (_) and hyphens (-) are allowed. Leave blank to disable.<br>
-                                            Note: Test newsletters are not considered as scheduled newsletters.
+                                            Note: Test newsletters are not considered scheduled newsletters.
                                         </p>
                                     </div>
                                     <div class="form-group">
                                         <label for="friendly_name">Description</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <input type="text" class="form-control" id="friendly_name" name="friendly_name" value="${newsletter['friendly_name']}" size="30">
+                                                <input type="text" class="form-control" id="friendly_name" name="friendly_name" value="${newsletter['friendly_name']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">Optional: Enter a description to help identify this newsletter in the newsletters list.</p>
@@ -197,7 +208,7 @@
                                     <label>Saving</label>
                                     <div class="checkbox">
                                         <label>
-                                            <input type="checkbox" id="newsletter_config_save_only_checkbox" data-id="newsletter_config_save_only" class="checkboxes" value="1" ${checked(newsletter['config']['save_only'])}> Save HTML File Only
+                                            <input type="checkbox" id="newsletter_config_save_only_checkbox" data-id="newsletter_config_save_only" class="checkboxes" value="1" autocomplete="off" ${checked(newsletter['config']['save_only'])}> Save HTML File Only
                                         </label>
                                         <p class="help-block">Enable to save the newsletter HTML file without sending it to any notification agent.</p>
                                         <input type="hidden" id="newsletter_config_save_only" name="newsletter_config_save_only" value="${newsletter['config']['save_only']}">
@@ -206,7 +217,7 @@
                                         <label for="newsletter_config_filename">HTML File Name</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <input type="text" class="form-control" id="newsletter_config_filename" name="newsletter_config_filename" value="${newsletter['config']['filename']}" size="30">
+                                                <input type="text" class="form-control" id="newsletter_config_filename" name="newsletter_config_filename" value="${newsletter['config']['filename']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">Optional: Enter the file name to use when saving the newsletter (ending with <span class="inline-pre">.html</span>). You may use any of the <a href="#newsletter-text-sub-modal" data-toggle="modal">newsletter text parameters</a>. Leave blank for default.</p>
@@ -216,7 +227,7 @@
                                     <label>Sending</label>
                                     <div class="checkbox">
                                         <label>
-                                            <input type="checkbox" id="newsletter_config_formatted_checkbox" data-id="newsletter_config_formatted" class="checkboxes" value="1" ${checked(newsletter['config']['formatted'])}> Send Newsletter as an HTML Formatted Email
+                                            <input type="checkbox" id="newsletter_config_formatted_checkbox" data-id="newsletter_config_formatted" class="checkboxes" value="1" autocomplete="off" ${checked(newsletter['config']['formatted'])}> Send Newsletter as an HTML Formatted Email
                                         </label>
                                         <p class="help-block">Enable to send the newsletter as an HTML formatted Email. Disable to only send a subject and body message to a different notification agent.</p>
                                         <input type="hidden" id="newsletter_config_formatted" name="newsletter_config_formatted" value="${newsletter['config']['formatted']}">
@@ -224,7 +235,7 @@
                                     <div class="form-group" id="email_notifier_select">
                                         <div class="checkbox">
                                             <label>
-                                                <input type="checkbox" id="newsletter_config_threaded_checkbox" data-id="newsletter_config_threaded" class="checkboxes" value="1" ${checked(newsletter['config']['threaded'])}> Enable Grouped Email Thread
+                                                <input type="checkbox" id="newsletter_config_threaded_checkbox" data-id="newsletter_config_threaded" class="checkboxes" value="1" autocomplete="off" ${checked(newsletter['config']['threaded'])}> Enable Grouped Email Thread
                                             </label>
                                             <p class="help-block">Enable to group this newsletter together in a single Email thread. Disable to send a new Email for each newsletter.</p>
                                             <input type="hidden" id="newsletter_config_threaded" name="newsletter_config_threaded" value="${newsletter['config']['threaded']}">
@@ -232,7 +243,7 @@
                                         <label for="newsletter_email_notifier_id">Email Notification Agent</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="newsletter_email_notifier_id" name="newsletter_email_notifier_id">
+                                                <select class="form-control" id="newsletter_email_notifier_id" name="newsletter_email_notifier_id" autocomplete="off">
                                                     % for notifier in email_notifiers:
                                                     <% selected = 'selected' if notifier['id'] == newsletter['email_config']['notifier_id'] else '' %>
                                                     % if notifier['friendly_name']:
@@ -255,7 +266,7 @@
                                         <label for="newsletter_config_notifier_id">Notification Agent</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <select class="form-control" id="newsletter_config_notifier_id" name="newsletter_config_notifier_id">
+                                                <select class="form-control" id="newsletter_config_notifier_id" name="newsletter_config_notifier_id" autocomplete="off">
                                                     % for notifier in other_notifiers:
                                                     <% selected = 'selected' if notifier['id'] == newsletter['config']['notifier_id'] else '' %>
                                                     % if notifier['friendly_name']:
@@ -286,7 +297,7 @@
                                             <label for="${item['name']}">${item['label']}</label>
                                             <div class="row">
                                                 <div class="col-md-12">
-                                                    <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" ${'readonly' if item.get('readonly') else ''}>
+                                                    <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off" ${'readonly' if item.get('readonly') else ''}>
                                                 </div>
                                             </div>
                                             <p class="help-block">${item['description'] | n}</p>
@@ -296,7 +307,7 @@
                                             <label for="${item['name']}">${item['label']}</label>
                                             <div class="row">
                                                 <div class="col-md-3">
-                                                    <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30">
+                                                    <input type="${item['input_type']}" class="form-control" id="${item['name']}" name="${item['name']}" value="${item['value']}" size="30" autocomplete="off">
                                                 </div>
                                             </div>
                                             <p class="help-block">${item['description'] | n}</p>
@@ -314,7 +325,7 @@
                                         % elif item['input_type'] == 'checkbox' and item['name'] != 'newsletter_email_html_support':
                                         <div class="checkbox">
                                             <label>
-                                                <input type="checkbox" data-id="${item['name']}" class="checkboxes" value="1" ${checked(item['value'])}> ${item['label']}
+                                                <input type="checkbox" data-id="${item['name']}" class="checkboxes" value="1" autocomplete="off" ${checked(item['value'])}> ${item['label']}
                                             </label>
                                             <p class="help-block">${item['description'] | n}</p>
                                             <input type="hidden" id="${item['name']}" name="${item['name']}" value="${item['value']}">
@@ -324,12 +335,16 @@
                                             <label for="${item['name']}">${item['label']}</label>
                                             <div class="row">
                                                 <div class="col-md-12">
-                                                    <select class="form-control" id="${item['name']}" name="${item['name']}">
+                                                    <select class="form-control" id="${item['name']}" name="${item['name']}" autocomplete="off">
                                                         % for key, value in sorted(item['select_options'].items()):
-                                                        % if key == item['value']:
-                                                        <option value="${key}" selected>${value}</option>
+                                                        % if isinstance(value, list):
+                                                        <optgroup label="${key}">
+                                                            % for option in sorted(value, key=lambda x: x['text'].lower()):
+                                                                <option value="${option['value']}" ${'selected' if option['value'] == item['value'] else ''}>${option['text']}</option>
+                                                            % endfor
+                                                        </optgroup>
                                                         % else:
-                                                        <option value="${key}">${value}</option>
+                                                        <option value="${key}" ${'selected' if key == item['value'] else ''}>${value}</option>
                                                         % endif
                                                         % endfor
                                                     </select>
@@ -342,7 +357,7 @@
                                             <label for="${item['name']}">${item['label']}</label>
                                             <div class="row">
                                                 <div class="col-md-12">
-                                                    <select class="form-control" id="${item['name']}" name="${item['name']}">
+                                                    <select class="form-control" id="${item['name']}" name="${item['name']}" autocomplete="off">
                                                         <option value="select-all">Select All</option>
                                                         <option value="remove-all">Remove All</option>
                                                         % if isinstance(item['select_options'], dict):
@@ -387,7 +402,7 @@
                                         <label for="subject">Subject</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <input type="text" class="form-control" id="subject" name="subject" value="${newsletter['subject']}" size="30">
+                                                <input type="text" class="form-control" id="subject" name="subject" value="${newsletter['subject']}" size="30" autocomplete="off">
                                             </div>
                                         </div>
                                         <p class="help-block">
@@ -398,7 +413,7 @@
                                         <label for="body">Body</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <textarea class="form-control"  id="body" name="body" data-autoresize>${newsletter['body']}</textarea>
+                                                <textarea class="form-control"  id="body" name="body" autocomplete="off" data-autoresize>${newsletter['body']}</textarea>
                                             </div>
                                         </div>
                                         <p class="help-block">
@@ -409,11 +424,25 @@
                                         <label for="message">Message</label>
                                         <div class="row">
                                             <div class="col-md-12">
-                                                <textarea class="form-control"  id="message" name="message" data-autoresize>${newsletter['message']}</textarea>
+                                                <div class="editor-container" id="message-editor-container" style="display: none;">
+                                                    <div class="editor-controls">
+                                                        <button type="button" class="btn btn-dark btn-edit editor-control-btn" id="format-code" title="Beautify HTML Code">
+                                                            <i class="fa fa-magic"></i>
+                                                        </button>
+                                                        <button type="button" class="btn btn-dark btn-edit editor-control-btn" id="toggle-wrap" title="Toggle Word Wrap">
+                                                            <i class="fa fa-arrows-h"></i>
+                                                        </button>
+                                                        <button type="button" class="btn btn-dark btn-edit editor-control-btn" id="toggle-gutter" title="Toggle Gutter">
+                                                            <i class="fa fa-list-ol"></i>
+                                                        </button>
+                                                    </div>
+                                                    <div id="message-editor"></div>
+                                                </div>
+                                                <textarea class="form-control" id="message" name="message" autocomplete="off">${newsletter['message']}</textarea>
                                             </div>
                                         </div>
                                         <p class="help-block">
-                                            Enter a custom message to include on the newsletter.
+                                            Enter a custom message to include on the newsletter. Supports HTML with syntax highlighting.
                                         </p>
                                     </div>
                                 </div>
@@ -459,7 +488,44 @@
 </div>
 
 <script src="${http_root}js/jquery-cron-min.js"></script>
+<script src="${http_root}js/ace/ace.js"></script>
+<script src="${http_root}js/beautify-html.min.js"></script>
 <script>
+
+    // Replace the message textarea with an Ace editor when the Newsletter Text tab first opens.
+    // The hidden textarea keeps the value that the form saves.
+    var destroyEditor = $.noop;
+    $('#newsletter-text-tab').one('shown.bs.tab', function () {
+        if (!window.ace) return;
+        var textarea = $('#message').hide();
+        $('#message-editor-container').show();
+        var editor = ace.edit('message-editor');
+        editor.setTheme('ace/theme/tautulli');
+        editor.session.setMode('ace/mode/html');
+        editor.setOptions({ showPrintMargin: false, fontSize: '14px', tabSize: 2, wrap: true });
+        editor.session.setValue(textarea.val());
+        editor.on('change', function () { textarea.val(editor.getValue()); });
+
+        // The message is an HTML fragment, so drop the warnings that expect a full document.
+        editor.session.on('changeAnnotation', function () {
+            var annotations = editor.session.getAnnotations();
+            var kept = annotations.filter(function (a) {
+                return !/doctype first\. Expected|Unexpected End of file\. Expected/.test(a.text);
+            });
+            if (kept.length < annotations.length) editor.session.setAnnotations(kept);
+        });
+
+        $('#format-code').click(function () {
+            var html = html_beautify(editor.getValue().trim(), { max_preserve_newlines: 5 });
+            editor.setValue(html, 1);
+        });
+        $('#toggle-wrap').click(function () { editor.session.setUseWrapMode(!editor.session.getUseWrapMode()); });
+        $('#toggle-gutter').click(function () { editor.renderer.setShowGutter(!editor.renderer.getShowGutter()); });
+
+        // Destroy the editor on close or reload so its HTML worker stops.
+        destroyEditor = function () { editor.destroy(); };
+        $('#newsletter-config-modal').one('hidden.bs.modal', destroyEditor);
+    });
 
     $('#newsletter-config-modal').unbind('hidden.bs.modal');
 
@@ -472,10 +538,10 @@
     });
 
     if (${newsletter['config']['custom_cron']}) {
-        $('#cron_value').val('${newsletter['cron']}');
+        $('#cron_value').val(${json_dumps_for_html(newsletter['cron']) | n});
     } else {
         try {
-            cron_widget.cron('value', '${newsletter['cron']}');
+            cron_widget.cron('value', ${json_dumps_for_html(newsletter['cron']) | n});
         } catch (e) {}
     }
 
@@ -543,7 +609,7 @@
         }
     });
     var incl_libraries = $incl_libraries[0].selectize;
-    incl_libraries.setValue(${json.dumps(next((c['value'] for c in newsletter['config_options'] if c['name'] == 'newsletter_config_incl_libraries'), [])) | n});
+    incl_libraries.setValue(${json_dumps_for_html(next((c['value'] for c in newsletter['config_options'] if c['name'] == 'newsletter_config_incl_libraries'), [])) | n});
 
     initConfigCheckbox('#newsletter_config_save_only_checkbox', '#newsletter_agent_options', true);
 
@@ -619,6 +685,11 @@
         createFilter: function(input) {
             var match, regex;
 
+            // allow undisclosed-recipients:; input (only in "To" field)
+            if (input === 'undisclosed-recipients:;' && this.$input.attr('id') === 'newsletter_email_to') {
+                return !this.options.hasOwnProperty(input);
+            }
+
             // email@address.com
             regex = new RegExp('^' + REGEX_EMAIL + '$', 'i');
             match = input.match(regex);
@@ -632,6 +703,10 @@
             return false;
         },
         create: function(input) {
+            // undisclosed-recipients:; allowed (only in "To" field)
+            if (input === 'undisclosed-recipients:;' && this.$input.attr('id') === 'newsletter_email_to') {
+                return {value: input};
+            }
             if ((new RegExp('^' + REGEX_EMAIL + '$', 'i')).test(input)) {
                 return {value: input};
             }
@@ -648,9 +723,9 @@
     var email_to = $email_selectors[0].selectize;
     var email_cc = $email_selectors[1].selectize;
     var email_bcc = $email_selectors[2].selectize;
-    email_to.setValue(${json.dumps(next((c['value'] for c in newsletter['email_config_options'] if c['name'] == 'newsletter_email_to'), [])) | n});
-    email_cc.setValue(${json.dumps(next((c['value'] for c in newsletter['email_config_options'] if c['name'] == 'newsletter_email_cc'), [])) | n});
-    email_bcc.setValue(${json.dumps(next((c['value'] for c in newsletter['email_config_options'] if c['name'] == 'newsletter_email_bcc'), [])) | n});
+    email_to.setValue(${json_dumps_for_html(next((c['value'] for c in newsletter['email_config_options'] if c['name'] == 'newsletter_email_to'), [])) | n});
+    email_cc.setValue(${json_dumps_for_html(next((c['value'] for c in newsletter['email_config_options'] if c['name'] == 'newsletter_email_cc'), [])) | n});
+    email_bcc.setValue(${json_dumps_for_html(next((c['value'] for c in newsletter['email_config_options'] if c['name'] == 'newsletter_email_bcc'), [])) | n});
 
     function reloadModal() {
         $.ajax({
@@ -659,6 +734,7 @@
             cache: false,
             async: true,
             complete: function (xhr, status) {
+                destroyEditor();
                 $('#newsletter-config-modal').html(xhr.responseText);
             }
         });
@@ -676,6 +752,7 @@
         }
 
         getNewslettersTable();
+        toggleRevealTokens();
     }
 
     function deleteCallback() {
@@ -719,6 +796,9 @@
 
     $('#duplicate-newsletter-item').click(function() {
         var msg = 'Are you sure you want to duplicate this <strong>${newsletter["agent_label"]}</strong> newsletter?';
+        if ($('#set_newsletter_config .form-control[id$=_password]').val()) {
+            msg += '<br><br>Note: Saved passwords will not be copied over and must be re-entered.';
+        }
         var url = 'add_newsletter_config';
         confirmAjaxCall(url, msg, { agent_id: '${newsletter["agent_id"]}' }, null, duplicateCallback);
     });
@@ -744,6 +824,7 @@
         showMsg('<i class="fa fa-refresh fa-spin"></i>&nbsp; Sending Newsletter', false);
         $.ajax({
             url: 'send_newsletter',
+            type: 'POST',
             data: {
                 newsletter_id: $('#newsletter_id').val(),
                 notify_action: 'test'
@@ -787,6 +868,8 @@
         };
         $(this).on('focus keyup input', function () { resizeTextarea(this); }).removeAttr('data-autoresize');
     });
+
+    toggleRevealTokens();
 </script>
 % else:
 <div class="modal-dialog" role="document">

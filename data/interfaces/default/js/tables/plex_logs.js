@@ -6,11 +6,15 @@ var plex_log_table_options = {
     "order": [ 0, 'desc'],
     "pageLength": 50,
     "stateSave": true,
+    "stateSaveParams": function (settings, data) {
+        data.search.search = "";
+        data.start = 0;
+    },
     "stateDuration": 0,
     "language": {
                 "search": "Search: ",
                 "lengthMenu": "Show _MENU_ lines per page",
-                "emptyTable": "No log information available. Have you set your logs folder in the <a href='settings'>settings</a>?",
+                "emptyTable": "<a href='settings#tabs_tabs-plex_media_server'>No log information available. Have you set your logs folder in the settings?</a>",
                 "info": "Showing _START_ to _END_ of _TOTAL_ lines",
                 "infoEmpty": "Showing 0 to 0 of 0 lines",
                 "infoFiltered": "(filtered from _MAX_ total lines)",

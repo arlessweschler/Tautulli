@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 #  This file is part of Tautulli.
 #
@@ -15,30 +15,26 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Tautulli.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import division
-from __future__ import unicode_literals
-
-from future.builtins import zip
-from future.builtins import str
-
 import arrow
 import base64
 import cloudinary
 from cloudinary.api import delete_resources_by_tag
 from cloudinary.uploader import upload
 from cloudinary.utils import cloudinary_url
-import datetime
-from functools import wraps
+from collections import OrderedDict
+from datetime import date, datetime, timedelta, timezone
+from functools import reduce, wraps
 import hashlib
-import imghdr
-from future.moves.itertools import islice, zip_longest
+from itertools import groupby, islice, zip_longest
+from ipaddress import ip_address, ip_network, IPv4Address
 import ipwhois
 import ipwhois.exceptions
 import ipwhois.utils
-from IPy import IP
 import json
 import math
+import operator
 import os
+from pathlib import Path, PureWindowsPath
 import re
 import shlex
 import socket
@@ -46,21 +42,15 @@ import string
 import sys
 import time
 import unicodedata
-from future.moves.urllib.parse import urlencode
+from urllib.parse import urlencode
 from xml.dom import minidom
 import xmltodict
 
 import plexpy
-if plexpy.PYTHON2:
-    import common
-    import logger
-    import request
-    from api2 import API2
-else:
-    from plexpy import common
-    from plexpy import logger
-    from plexpy import request
-    from plexpy.api2 import API2
+from plexpy import common
+from plexpy import logger
+from plexpy import request
+from plexpy.api2 import API2
 
 
 def addtoapi(*dargs, **dkwargs):
@@ -170,14 +160,25 @@ def convert_milliseconds(ms):
     return minutes
 
 
-def convert_milliseconds_to_minutes(ms):
+def convert_milliseconds_to_seconds(ms):
+    if str(ms).isdigit():
+        seconds = float(ms) / 1000
+        return math.trunc(seconds)
+    return 0
 
+
+def convert_milliseconds_to_minutes(ms):
     if str(ms).isdigit():
         seconds = float(ms) / 1000
         minutes = round(seconds / 60, 0)
-
         return math.trunc(minutes)
+    return 0
 
+
+def seconds_to_minutes(s):
+    if str(s).isdigit():
+        minutes = round(s / 60, 0)
+        return math.trunc(minutes)
     return 0
 
 
@@ -207,14 +208,14 @@ def timestamp():
 
 
 def today():
-    today = datetime.date.today()
-    yyyymmdd = datetime.date.isoformat(today)
+    today = date.today()
+    yyyymmdd = date.isoformat(today)
 
     return yyyymmdd
 
 
 def utc_now_iso():
-    utcnow = datetime.datetime.utcnow()
+    utcnow = datetime.now(tz=timezone.utc).replace(tzinfo=None)
 
     return utcnow.isoformat()
 
@@ -223,15 +224,32 @@ def now(sep=False):
     return timestamp_to_YMDHMS(timestamp(), sep=sep)
 
 
-def timestamp_to_YMDHMS(ts, sep=False):
+def YMD_to_timestamp(ymd):
+    # datetime also converts the day before, which Windows rejects near the epoch.
+    return time.mktime(datetime.strptime(ymd, "%Y-%m-%d").timetuple())
+
+
+def YMD_to_timestamp_range(ymd):
+    """Return the [start, end) epoch bounds of the local calendar day."""
+    day = datetime.strptime(ymd, "%Y-%m-%d")
+    day_start = day.astimezone().timestamp()
+    day_end = (day + timedelta(days=1)).astimezone().timestamp()
+    return int(day_start), int(day_end)
+
+
+def timestamp_to_YMDHMS(ts, sep=False, ymd=False):
     dt = timestamp_to_datetime(ts)
     if sep:
+        if ymd:
+            return dt.strftime("%Y-%m-%d")
         return dt.strftime("%Y-%m-%d %H:%M:%S")
+    if ymd:
+        return dt.strftime("%Y%m%d")
     return dt.strftime("%Y%m%d%H%M%S")
 
 
 def timestamp_to_datetime(ts):
-    return datetime.datetime.fromtimestamp(ts)
+    return datetime.fromtimestamp(ts)
 
 
 def iso_to_YMD(iso):
@@ -242,30 +260,48 @@ def iso_to_datetime(iso):
     return arrow.get(iso).datetime
 
 
-def human_duration(s, sig='dhms'):
+def datetime_to_iso(dt, to_date=False):
+    if isinstance(dt, datetime):
+        if to_date:
+            dt = dt.date()
+        return dt.isoformat()
+    return dt
 
-    hd = ''
 
-    if str(s).isdigit() and s > 0:
-        d, h = divmod(s, 86400)
-        h, m = divmod(h, 3600)
-        m, s = divmod(m, 60)
+def human_duration(ms, sig='dhm', units='ms', return_seconds=300000):
+    factors = {'d': 86400000,
+               'h': 3600000,
+               'm': 60000,
+               's': 1000,
+               'ms': 1}
+
+    if str(ms).isdigit() and ms > 0:
+        if return_seconds and ms < return_seconds:
+            sig = 'dhms'
+
+        r = factors[sig[-1]]
+        ms = round(ms * factors[units] / r) * r
+
+        d, h = divmod(ms, factors['d'])
+        h, m = divmod(h, factors['h'])
+        m, s = divmod(m, factors['m'])
+        s, ms = divmod(s, factors['s'])
 
         hd_list = []
         if sig >= 'd' and d > 0:
             d = d + 1 if sig == 'd' and h >= 12 else d
-            hd_list.append(str(d) + ' days')
+            hd_list.append(str(d) + ' day' + ('s' if d > 1 else ''))
 
         if sig >= 'dh' and h > 0:
             h = h + 1 if sig == 'dh' and m >= 30 else h
-            hd_list.append(str(h) + ' hrs')
+            hd_list.append(str(h) + ' hr' + ('s' if h > 1 else ''))
 
         if sig >= 'dhm' and m > 0:
             m = m + 1 if sig == 'dhm' and s >= 30 else m
-            hd_list.append(str(m) + ' mins')
+            hd_list.append(str(m) + ' min' + ('s' if m > 1 else ''))
 
         if sig >= 'dhms' and s > 0:
-            hd_list.append(str(s) + ' secs')
+            hd_list.append(str(s) + ' sec' + ('s' if s > 1 else ''))
 
         hd = ' '.join(hd_list)
     else:
@@ -305,7 +341,7 @@ def bytes_to_mb(bytes):
 
 
 def mb_to_bytes(mb_str):
-    result = re.search('^(\d+(?:\.\d+)?)\s?(?:mb)?', mb_str, flags=re.I)
+    result = re.search(r'^(\d+(?:\.\d+)?)\s?(?:mb)?', mb_str, flags=re.I)
     if result:
         return int(float(result.group(1)) * 1048576)
 
@@ -355,9 +391,9 @@ def replace_all(text, dic, normalize=False):
 
 def replace_illegal_chars(string, type="file"):
     if type == "file":
-        string = re.sub('[\?"*:|<>/]', '_', string)
+        string = re.sub(r'[\?"*:|<>/]', '_', string)
     if type == "folder":
-        string = re.sub('[:\?<>"|]', '_', string)
+        string = re.sub(r'[:\?<>"|]', '_', string)
 
     return string
 
@@ -365,14 +401,14 @@ def replace_illegal_chars(string, type="file"):
 def cleanName(string):
 
     pass1 = latinToAscii(string).lower()
-    out_string = re.sub('[\.\-\/\!\@\#\$\%\^\&\*\(\)\+\-\"\'\,\;\:\[\]\{\}\<\>\=\_]', '', pass1).encode('utf-8')
+    out_string = re.sub(r'[\.\-\/\!\@\#\$\%\^\&\*\(\)\+\-\"\'\,\;\:\[\]\{\}\<\>\=\_]', '', pass1).encode('utf-8')
 
     return out_string
 
 
 def cleanTitle(title):
 
-    title = re.sub('[\.\-\/\_]', ' ', title).lower()
+    title = re.sub(r'[\.\-\/\_]', ' ', title).lower()
 
     # Strip out extra whitespace
     title = ' '.join(title.split())
@@ -380,6 +416,29 @@ def cleanTitle(title):
     title = title.title()
 
     return title
+
+
+def clean_filename(filename, replace='_', default='untitled'):
+    """ Returns a filename safe for use in the file system.
+
+        Parameters:
+            filename (str): Filename to make safe.
+            replace (str): Character to replace invalid characters with.
+            default (str): Filename to return if the cleaned filename is blank.
+    """
+    filename = unicodedata.normalize('NFC', filename)
+    cleaned = re.sub(r'[/\\?%*:|"<>\x7F\x00-\x1F]', replace, filename)
+    return cleaned.strip(' ._-') or default
+
+
+def truncate_title(title, max_bytes=150):
+    # File systems limit a file name to 255 bytes. NFC can make a title longer, so normalize before the cut.
+    title = unicodedata.normalize('NFC', str(title))
+    return title.encode('utf-8')[:max_bytes].decode('utf-8', 'ignore')
+
+
+def split_strip(s, delimiter=','):
+    return [x.strip() for x in str(s).split(delimiter) if x.strip()]
 
 
 def split_path(f):
@@ -438,36 +497,46 @@ def split_string(mystring, splitvar=','):
 def create_https_certificates(ssl_cert, ssl_key):
     """
     Create a self-signed HTTPS certificate and store in it in
-    'ssl_cert' and 'ssl_key'. Method assumes pyOpenSSL is installed.
+    'ssl_cert' and 'ssl_key'. Method assumes cryptography is installed.
 
     This code is stolen from SickBeard (http://github.com/midgetspy/Sick-Beard).
     """
     try:
-        from OpenSSL import crypto
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
     except ImportError:
-        logger.error("Unable to generate self-signed certificates: Missing OpenSSL module.")
+        logger.error("Unable to generate self-signed certificates: Missing cryptography module.")
         return False
-    from certgen import createKeyPair, createSelfSignedCertificate, TYPE_RSA
 
-    issuer = common.PRODUCT
-    serial = timestamp()
-    not_before = 0
-    not_after = 60 * 60 * 24 * 365 * 10  # ten years
-    domains = ['DNS:' + d.strip() for d in plexpy.CONFIG.HTTPS_DOMAIN.split(',') if d]
-    ips = ['IP:' + d.strip() for d in plexpy.CONFIG.HTTPS_IP.split(',') if d]
-    alt_names = ','.join(domains + ips).encode('utf-8')
+    alt_names = [x509.DNSName(d.strip()) for d in plexpy.CONFIG.HTTPS_DOMAIN.split(',') if d]
+    alt_names += [x509.IPAddress(ip_address(d.strip())) for d in plexpy.CONFIG.HTTPS_IP.split(',') if d]
 
     # Create the self-signed Tautulli certificate
-    logger.debug("Generating self-signed SSL certificate.")
-    pkey = createKeyPair(TYPE_RSA, 2048)
-    cert = createSelfSignedCertificate(issuer, pkey, serial, not_before, not_after, alt_names)
+    logger.info("Generating self-signed SSL certificate.")
+    pkey = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common.PRODUCT)])
+    now = datetime.now(timezone.utc)
+    builder = (x509.CertificateBuilder()
+               .subject_name(name)
+               .issuer_name(name)
+               .public_key(pkey.public_key())
+               .serial_number(timestamp())
+               .not_valid_before(now)
+               .not_valid_after(now + timedelta(days=365 * 10)))  # ten years
+    if alt_names:
+        builder = builder.add_extension(x509.SubjectAlternativeName(alt_names), critical=False)
+    cert = builder.sign(pkey, hashes.SHA256())
 
     # Save the key and certificate to disk
     try:
-        with open(ssl_cert, "w") as fp:
-            fp.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode('utf-8'))
-        with open(ssl_key, "w") as fp:
-            fp.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, pkey).decode('utf-8'))
+        with open(ssl_cert, "wb") as fp:
+            fp.write(cert.public_bytes(serialization.Encoding.PEM))
+        with open(ssl_key, "wb") as fp:
+            fp.write(pkey.private_bytes(serialization.Encoding.PEM,
+                                        serialization.PrivateFormat.PKCS8,
+                                        serialization.NoEncryption()))
     except IOError as e:
         logger.error("Error creating SSL key and certificate: %s", e)
         return False
@@ -476,6 +545,10 @@ def create_https_certificates(ssl_cert, ssl_key):
 
 
 def cast_to_int(s):
+    # get_xml_attr returns '' for missing attributes, making the empty
+    # string the most common failure; skip the exception machinery for it
+    if not s:
+        return 0
     try:
         return int(s)
     except (ValueError, TypeError):
@@ -483,8 +556,32 @@ def cast_to_int(s):
 
 
 def cast_to_float(s):
+    # 0 and False still go through float(), which returns 0.0
+    if s is None or s == '':
+        return 0
     try:
         return float(s)
+    except (ValueError, TypeError):
+        return 0
+
+
+def helper_divmod(a, b):
+    try:
+        return divmod(a, b)
+    except (ValueError, TypeError):
+        return 0
+
+
+def helper_len(s):
+    try:
+        return len(s)
+    except (ValueError, TypeError):
+        return 0
+
+
+def helper_round(n, ndigits=None):
+    try:
+        return round(n, ndigits)
     except (ValueError, TypeError):
         return 0
 
@@ -559,6 +656,64 @@ def process_json_kwargs(json_kwargs):
     return params
 
 
+def process_datatable_rows(rows, json_data, default_sort, search_cols=None, sort_keys=None):
+    if search_cols is None:
+        search_cols = []
+    if sort_keys is None:
+        sort_keys = {}
+
+    results = []
+
+    total_count = len(rows)
+
+    # Search results
+    search_value = json_data['search']['value'].lower()
+    if search_value:
+        searchable_columns = [d['data'] for d in json_data['columns'] if d['searchable']] + search_cols
+        for row in rows:
+            for k, v in row.items():
+                if k in sort_keys:
+                    value = sort_keys[k].get(v, v)
+                else:
+                    value = v
+                value = str(value).lower()
+                if k in searchable_columns and search_value in value:
+                    results.append(row)
+                    break
+    else:
+        results = rows
+
+    filtered_count = len(results)
+
+    # Sort results
+    results = sorted(results, key=lambda k: k[default_sort].lower())
+    sort_order = json_data['order']
+    for order in reversed(sort_order):
+        sort_key = json_data['columns'][int(order['column'])]['data']
+        reverse = True if order['dir'] == 'desc' else False
+        results = sorted(results, key=lambda k: sort_helper(k, sort_key, sort_keys), reverse=reverse)
+
+    # Paginate results
+    results = results[json_data['start']:(json_data['start'] + json_data['length'])]
+
+    data = {
+        'results': results,
+        'total_count': total_count,
+        'filtered_count': filtered_count
+    }
+
+    return data
+
+
+def sort_helper(k, sort_key, sort_keys):
+    v = k[sort_key]
+    if sort_key in sort_keys:
+        v = sort_keys[sort_key].get(k[sort_key], v)
+    if isinstance(v, str):
+        v = v.lower()
+    return v
+
+
 def sanitize_out(*dargs, **dkwargs):
     """ Helper decorator that sanitized the output
     """
@@ -582,16 +737,30 @@ def sanitize(obj):
     else:
         return obj
 
+def json_dumps_for_html(obj, **kwargs):
+    """ Serialize obj to JSON that is safe to embed inside an HTML <script> block.
+
+    json.dumps does not escape '<', '>' or '&', so a value containing '</script>'
+    would otherwise break out of the script element and allow HTML/JS injection.
+    These characters are replaced with their equivalent \\uXXXX escapes, which are
+    parsed back to the original characters by the JS engine but are inert to the
+    HTML parser. The line/paragraph separators are already escaped by json.dumps
+    (ensure_ascii defaults to True).
+    """
+    return (json.dumps(obj, **kwargs)
+            .replace('<', '\\u003c')
+            .replace('>', '\\u003e')
+            .replace('&', '\\u0026'))
 
 def is_public_ip(host):
     ip = is_valid_ip(get_ip(host))
-    if ip and ip.iptype() == 'PUBLIC':
-        return True
-    return False
+    return bool(ip and ip.is_global and not ip.is_private and not ip.is_multicast)
 
 
 def get_ip(host):
     ip_address = ''
+    if not isinstance(host, str):
+        return ip_address
     if is_valid_ip(host):
         return host
     elif not re.match(r'^[0-9]+(?:\.[0-9]+){3}(?!\d*-[a-z0-9]{6})$', host):
@@ -604,11 +773,11 @@ def get_ip(host):
 
 
 def is_valid_ip(address):
-    try:
-        return IP(address)
-    except TypeError:
+    if not isinstance(address, str):
         return False
-    except ValueError:
+    try:
+        return ip_address(address)
+    except (TypeError, ValueError):
         return False
 
 
@@ -650,12 +819,9 @@ def whois_lookup(ip_address):
     return whois_info
 
 
-# Taken from SickRage
 def anon_url(*url):
-    """
-    Return a URL string consisting of the Anonymous redirect URL and an arbitrary number of values appended.
-    """
-    return '' if None in url else '%s%s' % (plexpy.CONFIG.ANON_REDIRECT, ''.join(str(s) for s in url))
+    # Removed anonymous redirect and just return the URL
+    return '' if None in url else ''.join(str(s) for s in url)
 
 
 def get_img_service(include_self=False):
@@ -666,7 +832,7 @@ def get_img_service(include_self=False):
     elif plexpy.CONFIG.NOTIFY_UPLOAD_POSTERS == 3:
         return 'cloudinary'
     else:
-        return None
+        return ''
 
 
 def upload_to_imgur(img_data, img_title='', rating_key='', fallback=''):
@@ -678,7 +844,7 @@ def upload_to_imgur(img_data, img_title='', rating_key='', fallback=''):
         return img_url, delete_hash
 
     headers = {'Authorization': 'Client-ID %s' % plexpy.CONFIG.IMGUR_CLIENT_ID}
-    data = {'image': base64.b64encode(img_data),
+    data = {'image': base64str(img_data),
             'title': img_title.encode('utf-8'),
             'name': str(rating_key) + '.png',
             'type': 'png'}
@@ -687,7 +853,7 @@ def upload_to_imgur(img_data, img_title='', rating_key='', fallback=''):
                                                            headers=headers, data=data)
 
     if response and not err_msg:
-        logger.debug("Tautulli Helpers :: Image '{}' ({}) uploaded to Imgur.".format(img_title, fallback))
+        logger.info("Tautulli Helpers :: Image '{}' ({}) uploaded to Imgur.".format(img_title, fallback))
         imgur_response_data = response.json().get('data')
         img_url = imgur_response_data.get('link', '').replace('http://', 'https://')
         delete_hash = imgur_response_data.get('deletehash', '')
@@ -715,7 +881,7 @@ def delete_from_imgur(delete_hash, img_title='', fallback=''):
                                                            headers=headers)
 
     if response and not err_msg:
-        logger.debug("Tautulli Helpers :: Image '{}' ({}) deleted from Imgur.".format(img_title, fallback))
+        logger.info("Tautulli Helpers :: Image '{}' ({}) deleted from Imgur.".format(img_title, fallback))
         return True
     else:
         if err_msg:
@@ -739,18 +905,12 @@ def upload_to_cloudinary(img_data, img_title='', rating_key='', fallback=''):
         api_secret=plexpy.CONFIG.CLOUDINARY_API_SECRET
     )
 
-    # Cloudinary library has very poor support for non-ASCII characters on Python 2
-    if plexpy.PYTHON2:
-        _img_title = latinToAscii(img_title, replace=True)
-    else:
-        _img_title = img_title
-
     try:
         response = upload((img_title, img_data),
                           public_id='{}_{}'.format(fallback, rating_key),
                           tags=['tautulli', fallback, str(rating_key)],
-                          context={'title': _img_title, 'rating_key': str(rating_key), 'fallback': fallback})
-        logger.debug("Tautulli Helpers :: Image '{}' ({}) uploaded to Cloudinary.".format(img_title, fallback))
+                          context={'title': img_title, 'rating_key': str(rating_key), 'fallback': fallback})
+        logger.info("Tautulli Helpers :: Image '{}' ({}) uploaded to Cloudinary.".format(img_title, fallback))
         img_url = response.get('url', '')
     except Exception as e:
         logger.error("Tautulli Helpers :: Unable to upload image '{}' ({}) to Cloudinary: {}".format(img_title, fallback, e))
@@ -771,13 +931,18 @@ def delete_from_cloudinary(rating_key=None, delete_all=False):
     )
 
     if delete_all:
-        delete_resources_by_tag('tautulli')
-        logger.debug("Tautulli Helpers :: Deleted all images from Cloudinary.")
+        partial = True
+        next_cursor = ''
+        while partial is True:
+            r = delete_resources_by_tag('tautulli', next_cursor=next_cursor)
+            partial = r.get('partial', False)
+            next_cursor = r.get('next_cursor', '')
+        logger.info("Tautulli Helpers :: Deleted all images from Cloudinary.")
     elif rating_key:
         delete_resources_by_tag(str(rating_key))
-        logger.debug("Tautulli Helpers :: Deleted images from Cloudinary with rating_key {}.".format(rating_key))
+        logger.info("Tautulli Helpers :: Deleted images from Cloudinary with rating_key {}.".format(rating_key))
     else:
-        logger.debug("Tautulli Helpers :: Unable to delete images from Cloudinary: No rating_key provided.")
+        logger.warn("Tautulli Helpers :: Unable to delete images from Cloudinary: No rating_key provided.")
 
     return True
 
@@ -824,39 +989,6 @@ def cloudinary_transform(rating_key=None, width=1000, height=1500, opacity=100, 
     return url
 
 
-def cache_image(url, image=None):
-    """
-    Saves an image to the cache directory.
-    If no image is provided, tries to return the image from the cache directory.
-    """
-    # Create image directory if it doesn't exist
-    imgdir = os.path.join(plexpy.CONFIG.CACHE_DIR, 'images/')
-    if not os.path.exists(imgdir):
-        logger.debug("Tautulli Helpers :: Creating image cache directory at %s" % imgdir)
-        os.makedirs(imgdir)
-
-    # Create a hash of the url to use as the filename
-    imghash = hashlib.md5(url).hexdigest()
-    imagefile = os.path.join(imgdir, imghash)
-
-    # If an image is provided, save it to the cache directory
-    if image:
-        try:
-            with open(imagefile, 'wb') as cache_file:
-                cache_file.write(image)
-        except IOError as e:
-            logger.error("Tautulli Helpers :: Failed to cache image %s: %s" % (imagefile, e))
-
-    # Try to return the image from the cache directory
-    if os.path.isfile(imagefile):
-        imagetype = 'image/' + imghdr.what(os.path.abspath(imagefile))
-    else:
-        imagefile = None
-        imagetype = 'image/jpeg'
-
-    return imagefile, imagetype
-
-
 def build_datatables_json(kwargs, dt_columns, default_sort_col=None):
     """ Builds datatables json data
 
@@ -897,7 +1029,7 @@ def build_datatables_json(kwargs, dt_columns, default_sort_col=None):
     return json.dumps(json_data)
 
 
-def humanFileSize(bytes, si=True):
+def human_file_size(bytes, si=True):
     if str(bytes).isdigit():
         bytes = cast_to_float(bytes)
     else:
@@ -919,7 +1051,7 @@ def humanFileSize(bytes, si=True):
         bytes /= thresh
         u += 1
 
-    return "{0:.1f} {1}".format(bytes, units[u])
+    return "{0:.2f} {1}".format(bytes, units[u])
 
 
 def parse_condition_logic_string(s, num_cond=0):
@@ -1043,22 +1175,25 @@ def get_plexpy_url(hostname=None):
     else:
         scheme = 'http'
 
-    if hostname is None and plexpy.CONFIG.HTTP_HOST == '0.0.0.0':
-        import socket
+    if hostname is None and plexpy.CONFIG.HTTP_HOST in ('0.0.0.0', '::'):
+        # Only returns IPv4 address
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.settimeout(0)
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            s.connect(('<broadcast>', 0))
+            s.connect(('<broadcast>', 1))
             hostname = s.getsockname()[0]
         except socket.error:
             try:
                 hostname = socket.gethostbyname(socket.gethostname())
             except socket.gaierror:
                 pass
+        finally:
+            s.close()
 
         if not hostname:
             hostname = 'localhost'
-    elif hostname == 'localhost' and plexpy.CONFIG.HTTP_HOST != '0.0.0.0':
+    elif hostname == 'localhost' and plexpy.CONFIG.HTTP_HOST not in ('0.0.0.0', '::'):
         hostname = plexpy.CONFIG.HTTP_HOST
     else:
         hostname = hostname or plexpy.CONFIG.HTTP_HOST
@@ -1092,6 +1227,15 @@ def grouper(iterable, n, fillvalue=None):
     return zip_longest(fillvalue=fillvalue, *args)
 
 
+def group_by_keys(iterable, keys):
+    if not isinstance(keys, (list, tuple)):
+        keys = [keys]
+
+    key_function = operator.itemgetter(*keys)
+    sorted_iterable = sorted(iterable, key=key_function)
+    return {key: list(group) for key, group in groupby(sorted_iterable, key_function)}
+
+
 def chunk(it, size):
     it = iter(it)
     return iter(lambda: tuple(islice(it, size)), ())
@@ -1118,11 +1262,7 @@ def split_args(args=None):
     if isinstance(args, list):
         return args
     elif isinstance(args, str):
-        if plexpy.PYTHON2:
-            args = args.encode('utf-8')
         args = shlex.split(args)
-        if plexpy.PYTHON2:
-            args = [a.decode('utf-8') for a in args]
         return args
     return []
 
@@ -1151,6 +1291,263 @@ def bool_true(value, return_none=False):
     elif isinstance(value, str) and value.lower() in ('1', 'true', 't', 'yes', 'y', 'on'):
         return True
     return False
+
+
+def sort_attrs(attr):
+    if isinstance(attr, (list, tuple)):
+        a = attr[0].split('.')
+    else:
+        a = attr.split('.')
+    return len(a), a
+
+
+def sort_obj(obj):
+    if isinstance(obj, list):
+        result_obj = []
+        for item in obj:
+            result_obj.append(sort_obj(item))
+    elif isinstance(obj, dict):
+        result_start = []
+        result_end = []
+        for k, v in obj.items():
+            if isinstance(v, list):
+                for item in v:
+                    if isinstance(item, dict):
+                        result_end.append([k, sort_obj(v)])
+                    else:
+                        result_start.append([k, sort_obj(v)])
+                if not v:
+                    result_end.append([k, v])
+            else:
+                result_start.append([k, sort_obj(v)])
+
+        result_obj = OrderedDict(sorted(result_start) + sorted(result_end))
+    else:
+        result_obj = obj
+
+    return result_obj
+
+
+def get_attrs_to_dict(obj, attrs):
+    d = {}
+
+    for attr, sub in attrs.items():
+        no_attr = False
+
+        if isinstance(obj, dict):
+            value = obj.get(attr, None)
+        else:
+            try:
+                value = getattr(obj, attr)
+            except AttributeError:
+                no_attr = True
+                value = None
+
+        if callable(value):
+            value = value()
+
+        if isinstance(sub, str):
+            if isinstance(value, list):
+                value = [getattr(o, sub, None) for o in value]
+            else:
+                value = getattr(value, sub, None)
+        elif isinstance(sub, dict):
+            if isinstance(value, list):
+                value = [get_attrs_to_dict(o, sub) for o in value] or [get_attrs_to_dict({}, sub)]
+            else:
+                value = get_attrs_to_dict(value, sub)
+        elif callable(sub):
+            if isinstance(value, list):
+                value = [sub(o) for o in value]
+            else:
+                if no_attr:
+                    value = sub(obj)
+                else:
+                    value = sub(value)
+
+        d[attr] = value
+
+    return d
+
+
+def flatten_dict(obj):
+    return flatten_tree(flatten_keys(obj))
+
+
+def flatten_keys(obj, key='', sep='.'):
+    if isinstance(obj, list):
+        new_obj = [flatten_keys(o, key=key) for o in obj]
+    elif isinstance(obj, dict):
+        new_key = key + sep if key else ''
+        new_obj = {new_key + k: flatten_keys(v, key=new_key + k) for k, v in obj.items()}
+    else:
+        new_obj = obj
+
+    return new_obj
+
+
+def flatten_tree(obj, key=''):
+    if isinstance(obj, list):
+        new_rows = []
+
+        for o in obj:
+            if isinstance(o, dict):
+                new_rows.extend(flatten_tree(o))
+            else:
+                new_rows.append({key: o})
+
+    elif isinstance(obj, dict):
+        common_keys = {}
+        all_rows = [[common_keys]]
+
+        for k, v in obj.items():
+            if isinstance(v, list):
+                all_rows.append(flatten_tree(v, k))
+            elif isinstance(v, dict):
+                common_keys.update(*flatten_tree(v))
+            else:
+                common_keys[k] = v
+
+        new_rows = [{k: v for r in row for k, v in r.items()}
+                    for row in zip_longest(*all_rows, fillvalue={})]
+
+    else:
+        new_rows = []
+
+    return new_rows
+
+
+# https://stackoverflow.com/a/14692747
+def get_by_path(root, items):
+    """Access a nested object in root by item sequence."""
+    return reduce(operator.getitem, items, root)
+
+
+def set_by_path(root, items, value):
+    """Set a value in a nested object in root by item sequence."""
+    get_by_path(root, items[:-1])[items[-1]] = value
+
+
+def get_dict_value_by_path(root, attr):
+    split_attr = attr.split('.')
+    value = get_by_path(root, split_attr)
+    for _attr in reversed(split_attr):
+        value = {_attr: value}
+    return value
+
+
+# https://stackoverflow.com/a/7205107
+def dict_merge(a, b, path=None):
+    if path is None:
+        path = []
+    for key in b:
+        if key in a:
+            if isinstance(a[key], dict) and isinstance(b[key], dict):
+                dict_merge(a[key], b[key], path + [str(key)])
+            elif a[key] == b[key]:
+                pass
+            else:
+                pass
+        else:
+            a[key] = b[key]
+    return a
+
+
+#https://stackoverflow.com/a/26853961
+def dict_update(*dict_args):
+    """
+    Given any number of dictionaries, shallow copy and merge into a new dict,
+    precedence goes to key value pairs in latter dictionaries.
+    """
+    result = {}
+    for dictionary in dict_args:
+        result.update(dictionary)
+    return result
+
+
+# https://stackoverflow.com/a/28703510
+def escape_xml(value):
+    if value is None:
+        return ''
+
+    value = str(value) \
+        .replace("&", "&amp;") \
+        .replace("<", "&lt;") \
+        .replace(">", "&gt;") \
+        .replace('"', "&quot;") \
+        .replace("'", "&apos;")
+    return value
+
+
+# https://gist.github.com/reimund/5435343/
+def dict_to_xml(d, root_node=None, indent=None, level=0):
+    line_break = '' if indent is None else '\n'
+    wrap = not bool(root_node is None or isinstance(d, list))
+    root = root_node or 'objects'
+    root_singular = root[:-1] if root.endswith('s') and isinstance(d, list) else root
+    xml = ''
+    children = []
+
+    if isinstance(d, dict):
+        for key, value in sorted(d.items()):
+            if isinstance(value, dict):
+                children.append(dict_to_xml(value, key, indent, level + 1))
+            elif isinstance(value, list):
+                children.append(dict_to_xml(value, key, indent, level + 1))
+            else:
+                xml = '{} {}="{}"'.format(xml, key, escape_xml(value))
+    elif isinstance(d, list):
+        for value in d:
+            # Custom tag replacement for collections/playlists
+            if isinstance(value, dict) and root in ('children', 'items'):
+                root_singular = value.get('type', root_singular)
+            children.append(dict_to_xml(value, root_singular, indent, level))
+    else:
+        children.append(escape_xml(d))
+
+    end_tag = '>' if len(children) > 0 else '/>'
+    end_tag += line_break if isinstance(d, list) or isinstance(d, dict) else ''
+    spaces = ' ' * level * (indent or 0)
+
+    if wrap or isinstance(d, dict):
+        xml = '{}<{}{}{}'.format(spaces, root, xml, end_tag)
+
+    if len(children) > 0:
+        for child in children:
+            xml = '{}{}'.format(xml, child)
+
+        if wrap or isinstance(d, dict):
+            spaces = spaces if isinstance(d, dict) else ''
+            xml = '{}{}</{}>{}'.format(xml, spaces, root, line_break)
+
+    return xml
+
+
+def move_to_front(l, value):
+    try:
+        l.insert(0, l.pop(l.index(value)))
+    except (ValueError, IndexError):
+        pass
+    return l
+
+
+def is_hdr(bit_depth, color_trc):
+    bit_depth = cast_to_int(bit_depth)
+    return bit_depth > 8 and (color_trc == 'smpte2084' or color_trc == 'arib-std-b67')
+
+
+def version_to_tuple(version):
+    return tuple(cast_to_int(v) for v in version.strip('v').replace('-', '.').split('.'))
+
+
+# https://stackoverflow.com/a/1855118
+def zipdir(path, ziph):
+    # ziph is zipfile handle
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            ziph.write(os.path.join(root, file),
+                       arcname=os.path.relpath(os.path.join(root, file),
+                                               os.path.join(path, '.')))
 
 
 def page(endpoint, *args, **kwargs):
@@ -1241,7 +1638,7 @@ def browse_path(path=None, include_hidden=False, filter_ext=''):
         drives = ['%s:\\' % d for d in string.ascii_uppercase if os.path.exists('%s:' % d)]
         for drive in drives:
             out = {
-                'key': base64.b64encode(drive.encode('UTF-8')),
+                'key': base64str(drive),
                 'path': drive,
                 'title': drive,
                 'type': 'folder',
@@ -1258,7 +1655,7 @@ def browse_path(path=None, include_hidden=False, filter_ext=''):
     if path != os.path.dirname(path):
         parent_path = os.path.dirname(path)
         out = {
-            'key': base64.b64encode(parent_path.encode('UTF-8')),
+            'key': base64str(parent_path),
             'path': parent_path,
             'title': '..',
             'type': 'folder',
@@ -1268,7 +1665,7 @@ def browse_path(path=None, include_hidden=False, filter_ext=''):
     elif os.name == 'nt':
         parent_path = 'My Computer'
         out = {
-            'key': base64.b64encode(parent_path.encode('UTF-8')),
+            'key': base64str(parent_path),
             'path': parent_path,
             'title': parent_path,
             'type': 'folder',
@@ -1282,7 +1679,7 @@ def browse_path(path=None, include_hidden=False, filter_ext=''):
                 continue
             dir_path = os.path.join(root, d)
             out = {
-                'key': base64.b64encode(dir_path.encode('UTF-8')),
+                'key': base64str(dir_path),
                 'path': dir_path,
                 'title': d,
                 'type': 'folder',
@@ -1300,7 +1697,7 @@ def browse_path(path=None, include_hidden=False, filter_ext=''):
                 continue
             file_path = os.path.join(root, f)
             out = {
-                'key': base64.b64encode(file_path.encode('UTF-8')),
+                'key': base64str(file_path),
                 'path': file_path,
                 'title': f,
                 'type': 'file',
@@ -1321,3 +1718,107 @@ def delete_file(file_path):
     except OSError:
         logger.error("Tautulli Helpers :: Failed to delete file: %s", file_path)
         return False
+
+
+def short_season(title):
+    if title.startswith('Season ') and title[7:].isdigit():
+        return 'S%s' % title[7:]
+    return title
+
+
+def check_watched(media_type, view_offset, duration, marker_credits_first=None, marker_credits_final=None):
+    if isinstance(marker_credits_first, dict):
+        marker_credits_first = marker_credits_first['start_time_offset']
+    if isinstance(marker_credits_final, dict):
+        marker_credits_final = marker_credits_final['start_time_offset']
+
+    view_offset = cast_to_int(view_offset)
+    duration = cast_to_int(duration)
+
+    watched_percent = {
+        'movie': plexpy.CONFIG.MOVIE_WATCHED_PERCENT,
+        'episode': plexpy.CONFIG.TV_WATCHED_PERCENT,
+        'track': plexpy.CONFIG.MUSIC_WATCHED_PERCENT,
+        'clip': plexpy.CONFIG.TV_WATCHED_PERCENT
+    }
+    threshold = watched_percent.get(media_type, 0) / 100 * duration
+    if not threshold:
+        return False
+
+    if plexpy.CONFIG.WATCHED_MARKER == 1 and marker_credits_final:
+        return view_offset >= marker_credits_final
+    elif plexpy.CONFIG.WATCHED_MARKER == 2 and marker_credits_first:
+        return view_offset >= marker_credits_first
+    elif plexpy.CONFIG.WATCHED_MARKER == 3 and marker_credits_first:
+        return view_offset >= min(threshold, marker_credits_first)
+    else:
+        return view_offset >= threshold
+
+
+def pms_name():
+    return plexpy.CONFIG.PMS_NAME_OVERRIDE or plexpy.CONFIG.PMS_NAME
+
+
+def ip_type(ip: str) -> str:
+    try:
+        return "IPv4" if type(ip_address(ip)) is IPv4Address else "IPv6"
+    except ValueError:
+        return "Invalid"
+
+
+def get_ipv6_network_address(ip: str) -> str:
+    cidr = "/64"
+    cidr_pattern = re.compile(r'^/(1([0-1]\d|2[0-8]))$|^/(\d\d)$|^/[1-9]$')
+    if cidr_pattern.match(plexpy.CONFIG.NOTIFY_CONCURRENT_IPV6_CIDR):
+        cidr = plexpy.CONFIG.NOTIFY_CONCURRENT_IPV6_CIDR
+    return str(ip_network(ip+cidr, strict=False).network_address)
+
+
+def is_subdir(child: str, parent: str) -> bool:
+    child = Path(child).resolve()
+    parent = Path(parent).resolve()
+    return child.is_relative_to(parent)
+
+
+def is_mount(path: str) -> bool:
+    if not path:
+        return False
+
+    # Ignore paths within Tautulli's data directory (e.g. Docker /config folder)
+    if is_subdir(path, plexpy.DATA_DIR):
+        return False
+
+    try:
+        path = Path(path).resolve()
+    except OSError:
+        path = Path(path)
+
+    def is_filesystem_root(p: Path) -> bool:
+        # Windows: Drive letter roots (e.g., C:\, D:\) but not UNC paths (e.g., \\server\share)
+        if isinstance(p, PureWindowsPath) and len(p.drive) == 2 and p.parent == p:
+            return True
+        # Unix/Linux: Filesystem root (/)
+        if p == Path('/'):
+            return True
+        return False
+
+    try:
+        # Check if path or any parent is a mount (but not a filesystem root)
+        return any(p.is_mount() and not is_filesystem_root(p) for p in [path, *path.parents])
+    except (OSError, FileNotFoundError):
+        # If we can't check mount status (e.g., path doesn't exist, access denied)
+        return False
+
+
+def allow_mount(path: str) -> bool:
+    return plexpy.CONFIG.ALLOW_MOUNTED_FOLDERS or not is_mount(path)
+
+
+def base64str(text):
+    if isinstance(text, str):
+        text = text.encode('utf-8')
+    return base64.b64encode(text).decode('utf-8')
+
+
+def hash_pms_uuid():
+    return hashlib.sha256(plexpy.CONFIG.PMS_UUID.encode()).hexdigest()[:10]
